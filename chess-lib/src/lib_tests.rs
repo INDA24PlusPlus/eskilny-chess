@@ -2,19 +2,9 @@
 // ######### TESTS ##########
 // --------------------------
 
-use super::Colour;
-use super::Game;
-use super::GameOverReason;
-use super::GameState;
-use super::Piece;
-use super::PieceType;
-use super::Position;
-
-/// Test framework
-#[test]
-fn it_works() {
-    assert_eq!(2 + 2, 4);
-}
+use super::*;
+use super::board::*;
+use super::api::*;
 
 /// Test that game state is in progress after initialisation
 #[test]
@@ -23,7 +13,7 @@ fn game_in_progress_after_init() {
 
     println!("{}", game);
 
-    assert_eq!(game.get_game_state(), GameState::InProgress);
+    assert_eq!(game.get_game_state(), BoardState::Active);
 }
 
 /// Test whether position initialization works for all cases.
@@ -87,7 +77,7 @@ fn game_enters_check() {
     }
 
     eprintln!("{}", game);
-    assert_eq!(game.get_game_state(), GameState::Check);
+    assert_eq!(game.get_game_state(), BoardState::Check);
 }
 
 /// Test that the game state is checkmate after "skolmatt"
@@ -113,7 +103,7 @@ fn game_enters_checkmate() {
 
     eprintln!("{}", game);
     eprintln!("{:?}", game._can_make_legal_move());
-    assert_eq!(game.get_game_state(), GameState::GameOver);
+    assert_eq!(game.get_game_state(), BoardState::GameOver);
 }
 
 /// Test that the game enters the state waitingonpromotionchoice if a pawn should be promoted
@@ -144,7 +134,7 @@ fn game_enters_waitingonpromitionchoice() {
         );
     }
 
-    assert_eq!(game.get_game_state(), GameState::WaitingOnPromotionChoice);
+    assert_eq!(game.get_game_state(), BoardState::WaitingOnPromotionChoice);
 }
 
 /// Test whether a pawn can be promoted
@@ -175,9 +165,9 @@ fn game_promotes_correctly() {
         );
     }
 
-    assert_eq!(game.get_game_state(), GameState::WaitingOnPromotionChoice);
+    assert_eq!(game.get_game_state(), BoardState::WaitingOnPromotionChoice);
     assert!(game.set_promotion(PieceType::Queen).is_ok());
-    assert_eq!(game.get_game_state(), GameState::InProgress);
+    assert_eq!(game.get_game_state(), BoardState::Active);
     eprintln!("{}", game);
 }
 
@@ -391,9 +381,12 @@ fn game_sets_castling_bools_correctly_when_king_moved() {
 
     // moving white king
     let _ = game.make_move("e1", "e2");
-    assert!(!game.white_has_right_to_castle_queenside && !game.white_has_right_to_castle_kingside); // castling should be disabled for the white king
-    assert!(game.black_has_right_to_castle_kingside && game.black_has_right_to_castle_queenside); // castling should be enabled for the rest
-                                                                             // moving black king
+    // castling should be disabled for the white king
+    assert!(!game.white_has_right_to_castle_queenside && !game.white_has_right_to_castle_kingside);
+    // castling should be enabled for the black king
+    assert!(game.black_has_right_to_castle_kingside && game.black_has_right_to_castle_queenside);
+    
+    // moving black king
     let _ = game.make_move("e8", "e7");
     // castling should be disabled for all cases
     assert!(
@@ -429,9 +422,12 @@ fn game_sets_castling_bools_correctly_when_king_checked() {
 
     // checking black king
     let _ = game.make_move("f3", "f7");
-    assert!(!game.black_has_right_to_castle_queenside && !game.black_has_right_to_castle_kingside); // castling should be disabled for the black king
-    assert!(game.white_has_right_to_castle_kingside && game.white_has_right_to_castle_queenside); // castling should be enabled for the rest
-                                                                             // prep.
+    // castling should be disabled for the black king
+    assert!(!game.black_has_right_to_castle_queenside && !game.black_has_right_to_castle_kingside);
+    // castling should be enabled for the white king
+    assert!(game.white_has_right_to_castle_kingside && game.white_has_right_to_castle_queenside);
+
+    // prep.
     let _ = game.make_move("e8", "f7");
     let _ = game.make_move("a2", "a3");
     // checking the white king
@@ -751,7 +747,7 @@ fn _bug_avoidant_test_threefold_and_fivefold_repetition_rules() {
     }
 
     assert!(game.is_threefold_repetition());
-    assert_eq!(game.get_game_state(), GameState::InProgress);
+    assert_eq!(game.get_game_state(), BoardState::Active);
     for i in 10..17 {
         // 2 * 4 - 1 moves
         let _ = match i % 4 {
@@ -762,11 +758,11 @@ fn _bug_avoidant_test_threefold_and_fivefold_repetition_rules() {
             _default => panic!(), // dead code
         };
     }
-    assert_eq!(game.get_game_state(), GameState::InProgress);
+    assert_eq!(game.get_game_state(), BoardState::Active);
 
     // Final move
     let _ = game.make_move("e8", "e7");
-    assert_eq!(game.get_game_state(), GameState::GameOver);
+    assert_eq!(game.get_game_state(), BoardState::GameOver);
     assert_eq!(
         game.get_game_over_reason().unwrap(),
         GameOverReason::FivefoldRepetitionRule
@@ -788,7 +784,7 @@ fn test_50_and_75_move_rules() {
                     if !piece.is_pawn() {
                         let moves = game.get_possible_non_capture_moves(pos).unwrap();
                         if moves.len() > 0 && game.make_move_pos(pos, moves[0]).is_ok() {
-                            game.state = GameState::InProgress; // no fivefold repetition
+                            game.state = BoardState::Active; // no fivefold repetition
                             break
                         }
                     }
@@ -800,7 +796,7 @@ fn test_50_and_75_move_rules() {
 
     assert_eq!(game.halfmoves, 100);
     assert!(game.is_50_move_rule());
-    assert_eq!(game.get_game_state(), GameState::InProgress);
+    assert_eq!(game.get_game_state(), BoardState::Active);
 
     for i in 0..50 {
         for idx in 0..64 {
@@ -811,7 +807,7 @@ fn test_50_and_75_move_rules() {
                         let moves = game.get_possible_non_capture_moves(pos).unwrap();
                         if moves.len() > 0 && game.make_move_pos(pos, moves[0]).is_ok() {
                             if i != 49 {
-                                game.state = GameState::InProgress; // no fivefold repetition
+                                game.state = BoardState::Active; // no fivefold repetition
                             }
                             break
                         }
@@ -823,7 +819,7 @@ fn test_50_and_75_move_rules() {
     }
     assert_eq!(game.halfmoves, 150);
     assert!(game.is_75_move_rule());
-    assert_eq!(game.get_game_state(), GameState::GameOver);
+    assert_eq!(game.get_game_state(), BoardState::GameOver);
     /* Works, but in this case five fold repetition applies first, assert_eq!(
         game.get_game_over_reason().unwrap(),
         GameOverReason::SeventyFiveMoveRule
@@ -842,7 +838,7 @@ fn test_insufficient_material() {
         }
     }
     let _ = game.make_move("e1", "e2");
-    assert_eq!(game.get_game_state(), GameState::GameOver);
+    assert_eq!(game.get_game_state(), BoardState::GameOver);
     assert_eq!(game.get_game_over_reason().unwrap(), GameOverReason::InsufficientMaterial);
 
     // King, king, knight
@@ -855,7 +851,7 @@ fn test_insufficient_material() {
     }
     game.board[11] = Some(Piece{piece_type: PieceType::Pawn, colour: Colour::Black});
     let _ = game.make_move("b1", "d2");
-    assert_eq!(game.get_game_state(), GameState::GameOver);
+    assert_eq!(game.get_game_state(), BoardState::GameOver);
     assert_eq!(game.get_game_over_reason().unwrap(), GameOverReason::InsufficientMaterial);
 
     // King, king, bishop
@@ -868,7 +864,7 @@ fn test_insufficient_material() {
     }
     game.board[11] = Some(Piece{piece_type: PieceType::Pawn, colour: Colour::Black});
     let _ = game.make_move("c1", "d2");
-    assert_eq!(game.get_game_state(), GameState::GameOver);
+    assert_eq!(game.get_game_state(), BoardState::GameOver);
     assert_eq!(game.get_game_over_reason().unwrap(), GameOverReason::InsufficientMaterial);
 
     // King, king, bishops on the same colour square
@@ -881,7 +877,7 @@ fn test_insufficient_material() {
     }
     game.board[11] = Some(Piece{piece_type: PieceType::Pawn, colour: Colour::Black});
     let _ = game.make_move("c1", "d2");
-    assert_eq!(game.get_game_state(), GameState::GameOver);
+    assert_eq!(game.get_game_state(), BoardState::GameOver);
     assert_eq!(game.get_game_over_reason().unwrap(), GameOverReason::InsufficientMaterial);
 
     // King, king, bishops on the opposite colour squares (not dead)
@@ -894,7 +890,7 @@ fn test_insufficient_material() {
     }
     game.board[11] = Some(Piece{piece_type: PieceType::Pawn, colour: Colour::Black});
     let _ = game.make_move("c1", "d2");
-    assert_eq!(game.get_game_state(), GameState::InProgress);
+    assert_eq!(game.get_game_state(), BoardState::Active);
 }
 
 /// Verify that the chess board output is accurate

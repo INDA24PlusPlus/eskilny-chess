@@ -1,12 +1,11 @@
-use chess_engine::Game;
-use chess_engine::GameState;
-use chess_engine::Position;
-use chess_engine::PieceType;
+use chess_lib::Game;
+use chess_lib::BoardState;
+use chess_lib::Position;
+use chess_lib::PieceType;
 
 /*
 
-This file shows a basic way to interact with the chess engine.
-(This is how I interacted with it while programming.)
+This file shows a basic way to interact with the chess library.
 
 */
 
@@ -30,8 +29,7 @@ fn main() {
         // read next input
         let input_tmp = lines
             .next() // we iterate over the first line
-            .expect("Invalid iostream.")
-            .expect("Error."); // expect errors
+            .expect("No next line.").expect("Invalid iostream."); // expect errors
         let input: Vec<&str> = input_tmp
             .trim() // remove whitespaces
             .split(" ")
@@ -45,7 +43,7 @@ fn main() {
         } else if input[0] == "gm" {
             println!(
                 "{:?}",
-                game.get_possible_moves(Position::parse_str(input[1]).unwrap())
+                game.get_legal_moves(Position::parse_str(input[1]).unwrap())
             );
         } else if input[0] == "piece" {
             println!(
@@ -63,7 +61,7 @@ fn main() {
         }
 
         // if the game is waiting on a pawn promotion, make the user fix this!
-        while game.get_game_state() == GameState::WaitingOnPromotionChoice {
+        while game.get_game_state() == BoardState::WaitingOnPromotionChoice {
             println!("What would you like to promote the pawn to?");
 
             // read next input

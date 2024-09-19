@@ -5,22 +5,20 @@
  * TODO write this comment
 */
 
-use std::fmt;
+// TODO remove ability to place multiple kings
+
+use std::{collections::HashSet, fmt::{self}};
 
 /// The current state of the game.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum GameState {
+pub enum BoardState {
     /// The game is initialized and playable. The game starts in this state.
     /// This is the general state of the game unless the game is in check.
-    InProgress,
+    Active,
     /// The game is in a state where the active colour's king is in check.
     ///
     /// In this state, `get_possible_moves()` returns only the moves that result in the king no longer being in check.
     Check,
-    /// The game is waiting for the user to choose which piece the recently moved pawn should be promoted to.
-    ///
-    /// Pieces are promoted through the method `Game::set_promotion(PieceType)`.
-    WaitingOnPromotionChoice, // TODO fix history in relation to state
     /// The game is over. All state-altering functions will not work in this state.
     ///
     /// This state is reached by the game ending in some way. See `GameOverReason` for information about how.
@@ -87,6 +85,13 @@ impl Colour {
             Colour::White => 1,
             Colour::Black => -1,
         };
+    }
+}
+
+impl fmt::Display for Colour {
+    // Make the formatter print colours fancily outside of debug mode.
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
     }
 }
 
@@ -200,6 +205,24 @@ pub struct Piece {
 }
 
 impl Piece {
+    pub fn new_from_fen(fen_char: char) -> Result<Piece, String> {
+        let piece_type = match PieceType::from_char(fen_char.to_ascii_uppercase()) {
+            Ok(piece_type) => piece_type,
+            Err(_) => return Err(format!("Invalid FEN character for piece initialization: {}", fen_char))
+        };
+        let colour: Colour;
+        if fen_char.is_uppercase() {
+            colour = Colour::White;
+        } else {
+            colour = Colour::Black;
+        }
+
+        return Ok(Piece {
+            piece_type,
+            colour,
+        })
+    }
+
     /// Returns true if the piece is a king
     pub fn is_king(&self) -> bool {
         return self.piece_type.is_king();
@@ -289,8 +312,7 @@ impl Piece {
 /// as well as `idx`, the index of the position in the board array.
 ///
 /// All constructors of this struct perform error handling and will not accept invalid input.
-///
-/// As such, every instance of Position that is not Position::NULL should represent a legal position.
+/// As long as you do not create your own position instances, every instance should be valid.
 pub struct Position {
     /// In chess, the rank is the row of the chess board. Internally this is a uint 0-7.
     pub rank: usize,
@@ -301,15 +323,6 @@ pub struct Position {
 }
 
 impl Position {
-    /// Unitialized position, set internally as idx 255.
-    ///
-    /// Is not considered a valid position.
-    const NULL: Position = Position {
-        rank: 255,
-        file: 255,
-        idx: 255,
-    };
-
     /// Constructor that parses some position on the chessboard from the corresponding rank and file as indices 0-7.
     ///
     /// Returns an `Ok(Position)`,
@@ -440,16 +453,10 @@ impl Position {
 
     /// Converts the given position to a String
     /// 
-    /// Position::NULL is displayed as a single hyphen (-)
-    /// 
     /// # Panics
     /// 
     /// Panics if self does not represent some position on the chessboard
-    /// and is not Position::NULL.
     pub fn to_string(&self) -> String {
-        if self == &Position::NULL {
-            return "-".to_owned();
-        }
         return format!(
             "{}{}",
             match self.file {
@@ -468,8 +475,6 @@ impl Position {
     }
 
     /// Validates self. Errors if self is not valid.
-    ///
-    /// Position::NULL is not a valid position.
     pub fn valid(&self) -> Result<(), String> {
         if self.rank < 8 && self.rank < 8 && self.idx == self.rank * 8 + self.file {
             return Ok(());
@@ -479,21 +484,1048 @@ impl Position {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+/// TODO
+pub struct Move {
+    from: Position,
+    to: Position,
+    piece_moved: Piece,
+    /// None if no piece is captured by this move
+    piece_captured: Option<Piece>,
+    /// None if no piece is captured by this move.
+    /// 
+    /// Differs only from field `to` when the capture is en passant.
+    pos_captured: Option<Position>,
+    /// None unless a pawn is promoted by the move.
+    promotion_choice: Option<PieceType>,
+}
+
+impl Move {
+    /// Initiates a new move from `from` to `to` on the board `board`.
+    /// 
+    /// Errors if either position is incorrect or there is no piece on `from`.
+    /// Also errors if the move is not valid.
+    pub fn new(board: &mut Board, from: Position, to: Position, promotion_choice: Option<PieceType>) -> Result<Move, String> {
+        from.valid()?;
+        to.valid()?;
+        let piece_moved = match board.array[from.idx] {
+            Some(piece) => piece,
+            None => return Err(format!("Position {:?} holds no piece", from))
+        };
+
+        // Evaluate whether en passant is enacted
+        let mut en_passant_pos: Option<Position> = None;
+        let mut en_passant_piece: Option<Piece> = None;
+        let maybe_en_passant_pos = to.offset(piece_moved.colour // active colour
+            .invert() // opponent's colour
+            .pawn_dir(), // opponent's pawn direction
+            0);
+        match board.en_passant_target {
+            Some(pos) => {
+                match maybe_en_passant_pos {
+                    Ok(pos2) => {
+                        if pos == pos2 {
+                            en_passant_pos = Some(pos);
+                            en_passant_piece = board.array[pos.idx];
+                        }
+                    },
+                    Err(_) => (),
+                }
+            }
+            None => (),
+        }
+
+        let piece_captured = match board.array[to.idx] {
+            Some(piece) => Some(piece),
+            None => en_passant_piece
+        };
+
+        let pos_captured = match piece_captured {
+            Some(_) => Some(to),
+            None => en_passant_pos
+        };
+
+        let mv = Move {
+            from,
+            to,
+            piece_moved,
+            piece_captured,
+            pos_captured,
+            promotion_choice,
+        };
+
+        mv.valid(board)?;
+
+        return Ok(mv)
+    }
+
+    /// Validates the move on the board `board`.
+    /// 
+    /// Errors if either position or the corresponding pieces are incorrect.
+    /// Also errors if a promotion isn't specified when necessary, or is specified unnecessarily.
+    /// Also errors if the move is not legal.
+    fn valid(&self, board: &mut Board) -> Result<(), String> {
+        self.from.valid()?;
+        self.to.valid()?;
+        if Some(self.piece_moved) != board.array[self.from.idx] {
+            return Err(format!("Position {:?} does not represent the piece moved!", self.from))
+        }
+        if self.piece_captured.is_none() != self.pos_captured.is_none() {
+            return Err(format!("Capture discrepancy between piece_captured {:?} and pos_captured {:?}", self.piece_captured, self.pos_captured))
+        }
+        if self.pos_captured.is_some_and(|pos| board.array[pos.idx] == self.piece_captured) {
+                return Err(format!("Position {:?} does not represent the piece captured!", self.to));
+            }
+        if Some(self.to) != self.pos_captured
+            && !self.pos_captured.is_none()
+            && board.en_passant_target != self.pos_captured {
+            return Err(format!("Position between {:?} and {:?}: en passant does not allow this move.", self.to, self.pos_captured))
+        }
+        if self.piece_moved.colour == board.active_colour {
+            return Err(format!("The piece you are trying to move is not of the active colour."))
+        }
+        if self.piece_moved.is_pawn() && (
+                (self.to.rank == 0 && self.piece_moved.is_black())
+                || (self.to.rank == 7 && self.piece_moved.is_white())
+            ) {
+            match self.promotion_choice {
+                None => return Err(format!("The promotion choice for the pawn needs to be specified in the move! Try specifying the field 'promotion_choice'.")),
+                Some(piece_type) => {
+                    if piece_type.is_king() || piece_type.is_pawn() {
+                        return Err(format!("The pawn cannot be promoted to a king or a pawn."))
+                    }
+                }
+            } 
+        } else if self.promotion_choice.is_some() {
+            return Err(format!("The promotion choice is unnecessarily specified."))
+        }
+        if !board.get_legal_moves().contains(&self) {
+            return Err(format!("The move is not legal."))
+        }
+
+        return Ok(())
+    }
+
+    fn is_capture(&self, board: &mut Board) -> Result<bool, String> {
+        self.valid(board)?;
+
+        Ok(self.piece_captured.is_some())
+    }
+
+    /// Returns true if the move is a promotion move.
+    /// 
+    /// Errors if called on an invalid move.
+    fn is_promotion(&self, board: &mut Board) -> Result<bool, String> {
+        self.valid(board)?;
+
+        return Ok(self.promotion_choice.is_some());
+    }
+
+    /// Sets the promotion of this move. Useful if you do not want to keep track of all possible promotion moves.
+    /// 
+    /// Errors if called on an invalid move or non-promotion move.
+    fn set_promotion_choice(&mut self, piece_type: PieceType, board: &mut Board) -> Result<(), String> {
+        match self.promotion_choice {
+            None => return Err(format!("Called on a move where no promotion should occur.")),
+            Some(_) => self.promotion_choice = Some(piece_type),
+        }
+
+        self.valid(board)?;
+
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 /// An entry in the chess engine's move history.
 pub struct HistoryEntry {
     /// The Forsyth-Edwards Notation (FEN) for the game state.
     fen: String,
-    /// Position (XF) moved from.
-    from: String,
-    /// Position (XF) moved to.
-    to: String,
-    piece_moved: Piece,
-    /// None if no piece was captured.
-    piece_captured: Option<Piece>,
+    /// Whether or not an en passant pawn is capturable by some piece
+    legal_moves: Vec<Move>,
+    /// The most recent move
+    last_move: Move,
 }
 
-/// An engine that runs a game of chess. 
+/// TODO
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Board {
+    state: BoardState,
+    game_over_reason: Option<GameOverReason>,
+    array: [Option<Piece>; 8*8],
+    active_colour: Colour,
+    white_has_right_to_castle_queenside: bool,
+    white_has_right_to_castle_kingside: bool,
+    black_has_right_to_castle_queenside: bool,
+    black_has_right_to_castle_kingside: bool,
+    en_passant_target: Option<Position>,
+    /// Halfmoves are the number of moves since the last pawn advance or piece capture
+    halfmoves: u8,
+    fullmoves: u32,
+    /// Cache of the vector of valid moves to avoid recomputation costs.
+    legal_moves_cache: Option<Vec<Move>>,
+    /// Cache of the FEN-representation of the current state to avoid recomputation costs.
+    fen_cache: Option<String>,
+    history: Vec<HistoryEntry>,
+}
+
+impl Board {
+    fn new() -> Board {
+        let mut array: [Option<Piece>; 64] = [None; 64];
+
+        for colour in [Colour::White, Colour::Black] {
+            let king_rank: usize;
+            let pawn_rank: usize;
+            if colour == Colour::White {
+                king_rank = 0; // 1
+                pawn_rank = 1; // 2
+            } else {
+                king_rank = 7; // 8
+                pawn_rank = 6; // 7
+            }
+
+            for (file, piece_type) in [
+                PieceType::Rook, // a
+                PieceType::Knight, // b
+                PieceType::Bishop, // c
+                PieceType::Queen, // d
+                PieceType::King, // e
+                PieceType::Bishop, // f
+                PieceType::Knight, // g
+                PieceType::Rook, // h
+                ].iter().enumerate() {
+                    array[king_rank*8+file] = Some(Piece{
+                        piece_type: *piece_type,
+                        colour,
+                    });
+                    array[pawn_rank*8+file] = Some(Piece{
+                        piece_type: PieceType::Pawn,
+                        colour,
+                    });
+                }
+        }
+
+        Board {
+            state: BoardState::Active,
+            game_over_reason: None,
+            array,
+            active_colour: Colour::White,
+            white_has_right_to_castle_queenside: true,
+            white_has_right_to_castle_kingside: true,
+            black_has_right_to_castle_queenside: true,
+            black_has_right_to_castle_kingside: true,
+            en_passant_target: None,
+            halfmoves: 0,
+            fullmoves: 0,
+            legal_moves_cache: None,
+            fen_cache: None,
+            history: vec![],
+        }
+    }
+
+    fn new_from_fen(fen: String) -> Result<Board,String> {
+        let mut array: [Option<Piece>; 64] = [None; 64];
+
+        let fen_vec = fen.split_whitespace().collect::<Vec<&str>>();
+        
+        // Field 1: piece placement
+        let mut rank: usize = 0;
+        let mut file: usize = 0;
+        for c in fen_vec[0].chars() {
+            match c {
+                '1'..'8' => {
+                    file += c.to_string().parse::<usize>().unwrap();
+                    if file > 7 {
+                        return Err(format!("Invalid FEN-string: the first field {} is invalid", fen_vec[0]));
+                    }
+                }
+                '/' => {
+                    if file != 7 {
+                        return Err(format!("Invalid FEN-string: the first field {} is invalid", fen_vec[0]));
+                    }
+                    rank += 1;
+                    file = 0;
+                    continue
+                }
+                _ => {
+                    let piece = match Piece::new_from_fen(c) {
+                        Ok(piece) => piece,
+                        Err(_) => return Err(format!("Invalid FEN-string: the first field {} is invalid", fen_vec[0]))
+                    };
+
+                    array[rank*8 + file] = Some(piece);
+
+                }
+            }
+        }
+        if !(file == 7 && rank == 7) {
+            return Err(format!("Invalid FEN-string: the first field {} is invalid", fen_vec[0]))
+        }
+
+        // Field 2: active colour
+        let active_colour = match fen_vec[1] {
+            "w" => Colour::White,
+            "b" => Colour::Black,
+            _ => return Err(format!("Invalid FEN-string: active colour {} is invalid", fen_vec[1]))
+        };
+
+        // Field 3: castling rights
+        let mut castling: [bool; 4] = [false; 4];
+        for c in fen_vec[2].chars() {
+            match c {
+                'Q'=> castling[0] = true,
+                'K'=> castling[1] = true,
+                'q'=> castling[2] = true,
+                'k'=> castling[3] = true,
+                '-' => break,
+                _ => return Err(format!("Invalid FEN-string: castling rights {} are invalid", fen_vec[2]))
+            }
+        }
+
+        // Field 4: en passant target (does not care whether the square is actually attacked)
+        let en_passant_target = match fen_vec[3] {
+            "-" => None,
+            _ => match Position::parse_str(fen_vec[3]) {
+                Ok(position) => Some(position),
+                Err(_) => return Err(format!("Invalid FEN-string: en-passant target {} is invalid", fen_vec[3]))
+            }
+        };
+
+        // Field 5: halfmoves
+        let halfmoves = match fen_vec[4].parse::<u8>() {
+            Ok(u) => u,
+            Err(_) => return Err(format!("Invalid FEN-string: halfmoves string {} is invalid", fen_vec[4]))
+        };
+
+        // Field 6: fullmoves
+        let fullmoves = match fen_vec[4].parse::<u32>() {
+            Ok(u) => u,
+            Err(_) => return Err(format!("Invalid FEN-string: fullmoves string {} is invalid", fen_vec[4]))
+        };
+
+        Ok(Board {
+            state: BoardState::Active,
+            game_over_reason: None,
+            array,
+            active_colour,
+            white_has_right_to_castle_queenside: castling[0],
+            white_has_right_to_castle_kingside: castling[1],
+            black_has_right_to_castle_queenside: castling[2],
+            black_has_right_to_castle_kingside: castling[3],
+            en_passant_target,
+            halfmoves,
+            fullmoves,
+            legal_moves_cache: None,
+            fen_cache: None,
+            history: vec![],
+        })
+    }
+
+    fn to_fen(&mut self) -> String {
+        match &self.fen_cache {
+            Some(fen) => return fen.clone(),
+            None => (),
+        }
+
+        let mut fen = String::new();
+
+        // Field 1: piece placement
+        let mut none_count: u8 = 0; // no. of empty squares in a row
+        for rank in 0..8 {
+            for file in 0..8 {
+                let idx = Position::idx(rank, file);
+                if self.array[idx].is_none() {
+                    none_count += 1;
+                } else {
+                    if none_count > 0 {
+                        // add empty square count to fen and reset
+                        fen.push_str(&none_count.to_string());
+                        none_count = 0;
+                    }
+                    // add piece to fen
+                    fen.push(self.array[idx].expect("is not none").to_char_colourcased());
+                }
+            }
+            if none_count > 0 {
+                // add empty square count to fen and reset
+                fen.push_str(&none_count.to_string());
+                none_count = 0;
+            }
+            if rank != 7 {
+                fen.push('/');
+            }
+        }
+
+        fen.push(' ');
+
+        // Field 2: active colour
+        fen.push(self.active_colour.to_char());
+
+        fen.push(' ');
+
+        // Field 3: castling rights
+        if self.white_has_right_to_castle_kingside {
+            fen.push('K')
+        }
+        if self.white_has_right_to_castle_queenside {
+            fen.push('Q')
+        }
+        if self.black_has_right_to_castle_kingside {
+            fen.push('k')
+        }
+        if self.black_has_right_to_castle_queenside {
+            fen.push('q')
+        }
+        if fen.ends_with(' ') {
+            // no castling rights
+            fen.push('-');
+        }
+
+        fen.push(' ');
+
+        // Field 4: possible en passant target
+        match self.en_passant_target {
+            Some(pos) => fen.push_str(&pos.to_string()),
+            None => fen.push('-'),
+        }
+
+        fen.push(' ');
+
+        // Field 5: halfmoves
+        fen.push_str(&self.halfmoves.to_string());
+
+        fen.push(' ');
+
+        // Field 6: fullmoves
+        fen.push_str(&self.fullmoves.to_string());
+
+        self.fen_cache = Some(fen.clone());
+        return fen;
+    }
+
+    fn is_nfold_repetition(&mut self, n: u8) -> bool {
+        let mut count = 0;
+        let fen = self.to_fen();
+        let legal_moves: HashSet<Move> = self.get_legal_moves().into_iter().collect();
+        for entry in self.history.clone() {
+            let mut f1 = entry.fen.split(" ");
+            let mut f2 = fen.split(" ");
+            for _ in 0..1 {
+                if f1.next().expect("fen") != f2.next().expect("fen") {
+                    // the piece placements and colours are not equal
+                    continue
+                }
+            }
+            if !entry.legal_moves.iter().all(|item| legal_moves.contains(item)) {
+                // the legal moves of the states are not equal
+                continue
+            }
+            count += 1;
+            if count == n {
+                break
+            }
+        }
+        return count == n;
+    }
+
+    fn get_legal_moves(&mut self) -> Vec<Move> {
+        match &self.legal_moves_cache {
+            Some(legal_moves) => return legal_moves.clone(),
+            None => (),
+        }
+
+        let mut legal_moves: Vec<Move> = vec![];
+        for i in 0..64 {
+            legal_moves.append(
+                &mut self._get_legal_moves_from_pos(Position::new_from_idx(i).unwrap(),
+                false).unwrap()
+            );
+        }
+        self.legal_moves_cache = Some(legal_moves.clone());
+        return legal_moves
+    }
+
+    /// If a piece is standing on the given tile, this method returns all possible new positions of that piece.
+    /// 
+    /// Errors only if pos is invalid.
+    ///
+    /// `looking_ahead` is true if the board is hypothetical
+    fn _get_legal_moves_from_pos(&mut self, pos: Position, looking_ahead: bool) -> Result<Vec<Move>,String> {
+        pos.valid()?;
+
+        // Get piece. If it is None, it cannot move so return an empty vector.
+        let piece: Piece = match self.array[pos.idx] {
+            None => return Ok(vec![]),
+            Some(piece) => piece,
+        };
+
+        // Start listing possible moves.
+        let mut possible_moves: Vec<Move> = Vec::with_capacity(60);
+
+        // For each piece_type, follow some set of rules.
+        /* This function declares how pieces can move, `try_move` tries if the piece can move somewhere.
+            Design philosophy:
+            - Generate directions for how all pieces can move.
+            - Then, iterate over every direction using `try_move` (see the function for details)
+                which returns true if the piece can move to the arrived to position (or capture there).
+            - If the piece can move there, add the move to the list of possible moves.
+            - For pawns, check that the move captures only when appropriate.
+            - Castling is hard-coded.
+        */
+        match piece.piece_type {
+            PieceType::King => {
+                // Kings can move all directions but only one distance.
+                // Kings can also castle if nothing has happened in the game that disables this.
+                // (See comments on `struct Game` fields for details.)
+
+                // Normal movement.
+                for (rank_step, file_step) in [
+                    (1, 1),
+                    (1, 0),
+                    (1, -1),
+                    (0, 1),
+                    (0, -1),
+                    (-1, 1),
+                    (-1, 0),
+                    (-1, -1),
+                ] {
+                    match self.try_move(pos, rank_step, file_step, 1, looking_ahead) {
+                        Some(mv) => possible_moves.push(mv),
+                        None => (),
+                    }
+                }
+
+                // Castling.
+                // (One case per castling opportunity, since they have hardcoded positioning.)
+                match piece.colour {
+                    Colour::White => {
+                        let king_pos = Position::new(0, 4).unwrap();
+                        if self.white_has_right_to_castle_queenside {
+                            // Boolean is true iff the king is at e1 and the rook is at a1.
+                            // Check if b1 [idx 1], c1 [idx 2], and d1 [idx 3] are free.
+                            if self.array[1].is_none()
+                                && self.array[2].is_none()
+                                && self.array[3].is_none()
+                            {
+                                // In that case check if the king is checked on the way to castling at c1.
+                                for i in 1..=3 {
+                                    match self.try_move(king_pos, 0, -i, 1, looking_ahead) {
+                                        None => break,
+                                        Some(mv) => if i == 3 { possible_moves.push(mv) },
+                                    }
+                                }
+                            }
+                        }
+                        if self.white_has_right_to_castle_kingside {
+                            // Boolean is true iff the king is at e1 and the rook is at h1.
+                            // Check if f1 [idx 5] and g1 [idx 6] are free.
+                            if self.array[5].is_none() && self.array[6].is_none() {
+                                // In that case check if the king is checked on the way to castling at g1.
+                                for i in 1..=2 {
+                                    match self.try_move(king_pos, 0, i, 1, looking_ahead) {
+                                        None => break,
+                                        Some(mv) => if i == 2 { possible_moves.push(mv) },
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Colour::Black => {
+                        let king_pos = Position::new(7, 4).unwrap();
+                        if self.black_has_right_to_castle_queenside {
+                            // Boolean is true iff the king is at e8 and the rook is at a8.
+                            // Check if b8 [idx 57], c8 [idx 58] and d8 [idx 59] are free.
+                            if self.array[57].is_none() && self.array[58].is_none() && self.array[59].is_none() {
+                                for i in 1..=3 {
+                                    match self.try_move(king_pos, 0, -i, 1, looking_ahead) {
+                                        None => break,
+                                        Some(mv) => if i == 3 { possible_moves.push(mv) },
+                                    }
+                                }
+                            }
+                        }
+                        if self.black_has_right_to_castle_kingside {
+                            // Boolean is true iff the king is at d8 and the rook is at h8.
+                            // Check if f8 [idx 61] and g8 [idx 62] are free.
+                            if self.array[61].is_none() && self.array[62].is_none() {
+                                // In that case check if the king is checked on the way to castling at g8.
+                                for i in 1..=2 {
+                                    match self.try_move(king_pos, 0, i, 1, looking_ahead) {
+                                        None => break,
+                                        Some(mv) => if i == 2 { possible_moves.push(mv) },
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            PieceType::Queen => {
+                // Queens can move all directions and however far they like. (The board is size 8.)
+                for (rank_step, file_step) in [
+                    (1, 1),
+                    (1, 0),
+                    (1, -1),
+                    (0, 1),
+                    (0, -1),
+                    (-1, 1),
+                    (-1, 0),
+                    (-1, -1),
+                ] {
+                    for steps in 1..8 {
+                        match self.try_move(pos, rank_step, file_step, steps, looking_ahead) {
+                            Some(mv) => possible_moves.push(mv),
+                            None => break,
+                        }
+                    }
+                }
+            }
+            PieceType::Bishop => {
+                // Bishops can move all diagonal directions and however far they like. (The board is size 8.)
+                for (rank_step, file_step) in [(1, 1), (1, -1), (-1, 1), (-1, -1)] {
+                    for steps in 1..8 {
+                        match self.try_move(pos, rank_step, file_step, steps, looking_ahead) {
+                            Some(mv) => possible_moves.push(mv),
+                            None => break,
+                        }
+                    }
+                }
+            }
+            PieceType::Knight => {
+                // Knight can move according to eight movesets.
+                for (rank_step, file_step) in [
+                    (2, 1),
+                    (2, -1),
+                    (1, 2),
+                    (1, -2),
+                    (-1, 2),
+                    (-1, -2),
+                    (-2, 1),
+                    (-2, -1),
+                ] {
+                    match self.try_move(pos, rank_step, file_step, 1, looking_ahead) {
+                        Some(mv) => possible_moves.push(mv),
+                        None => break,
+                    }
+                }
+            }
+            PieceType::Rook => {
+                // Rooks can move all non-diagonal directions and however far they like. (The board is size 8.)
+                for (rank_step, file_step) in [(1, 0), (0, 1), (0, -1), (-1, 0)] {
+                    for steps in 1..8 {
+                        match self.try_move(pos, rank_step, file_step, steps, looking_ahead) {
+                            Some(mv) => possible_moves.push(mv),
+                            None => break,
+                        }
+                    }
+                }
+            }
+            PieceType::Pawn => {
+                // Pawns can move forward once, twice if they are on their first rank
+                // Pawns can also capture diagonally, including en passant
+                let dir = piece.colour.pawn_dir();
+                let is_on_first_rank =
+                    piece.is_white() && pos.rank == 1 || piece.is_black() && pos.rank == 6;
+
+                // forward direction
+                for rank_step in 1..=2 {
+                    match self.try_move(pos, rank_step*dir, 0, rank_step, looking_ahead) {
+                        Some(mv) => {
+                            if mv.piece_captured.is_none() {
+                                possible_moves.push(mv)
+                            }
+                        },
+                        None => break,
+                    }
+                    if !is_on_first_rank {
+                        break;
+                    }
+                }
+
+                // diagonal direction
+                for file_step in [-1,1] {
+                    match self.try_move(pos, dir, file_step, file_step, looking_ahead) {
+                        Some(mv) => {
+                            if mv.piece_captured.is_some() {
+                                possible_moves.push(mv)
+                            }
+                        },
+                        None => break,
+                    }
+                }
+            }
+        }
+        return Ok(possible_moves);
+    }
+
+    /// Tries to offset (move) a piece at `from_pos` by `(rank_step, file_step)*steps`.
+    ///
+    /// Returns the move if the is legal, not obstructed and does not put the king in check.
+    ///
+    /// Takes as input `recursion_order` too, which is an integer describing which order in the recursion this iteration of try_move is.
+    /// If the iteration is higher than MAX_RECURSIONS, this function will not check whether a move implies putting the king in check.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `from_pos` is not the position of a piece
+    fn try_move(
+        &mut self,
+        from_pos: Position,
+        rank_step: i32,
+        file_step: i32,
+        steps: i32,
+        looking_ahead: bool,
+    ) -> Option<Move> {
+        assert!(from_pos.valid().is_ok(),"try_move was called from invalid from_pos.");
+        let moved_piece = match self.array[from_pos.idx] {
+            Some(piece) => piece,
+            None => panic!(
+                "try_move was called trying to move a piece from a tile where there is no piece!"
+            ),
+        };
+
+        // Generate new position and check if it is reachable (not obstructed).
+        // If the position captures a piece on its last step, the position is reachable.
+        let mut to_pos = from_pos.clone();
+        for i in 1..=steps {
+            match to_pos.offset_self(rank_step, file_step) {
+                Err(_) => return None, // outside board
+                _ => {}
+            }
+            match self.array[to_pos.idx] {
+                Some(attacked_piece) => {
+                    if i != steps {
+                        // obstructed by a piece before the last step
+                        return None;
+                    } else if moved_piece.colour == attacked_piece.colour {
+                        // obstructed by a piece of the own colour
+                        return None;
+                    } else {
+                        // otherwise we are at the final step and found an opponent's piece
+                        break;
+                    }
+                }
+                None => continue, // empty, keep moving
+            }
+        } // If we exit the for-loop, to_pos is reachable.
+
+        let mv: Move = match Move::new(self, from_pos, to_pos, None) {
+            // Specifying piece_type if it is a promotion
+            Err(_) => match Move::new(self, from_pos, to_pos, Some(PieceType::Queen)) {
+                Ok(mv) => mv,
+                Err(_) => return None,
+            },
+            Ok(mv) => mv,
+        };
+
+        if looking_ahead == true {
+            // We do not care if the position puts the king in check
+            return Some(mv);
+        }
+
+        // Clone into a new game to try the movement in that game
+        let mut game_clone = self.clone();
+        match game_clone.make_move(mv) {
+            // Does not update active_colour
+            Ok(_) => (),
+            Err(_) => return None,
+        };
+        // The move is valid if it does not put the own king in check
+        match game_clone._is_in_check(game_clone.active_colour, true) {
+            false => None,
+            true => Some(mv),
+        }
+    }
+
+    fn _can_make_legal_move(&mut self) -> bool {
+        for (i, piece) in self.array.clone().iter().enumerate() {
+            if piece.is_some_and(|p| p.colour == self.active_colour) {
+                let legal_moves = self._get_legal_moves_from_pos(Position::new_from_idx(i).unwrap(), false).unwrap();
+                if legal_moves.len() > 0 {
+                    // We have found at least one legal move and return true
+                    return true;
+                }
+            }
+        }
+
+        // We have, after iterating over every piece, found no legal move and return false
+        return false;
+    }
+
+    /// Validates move and performs the move if valid. Errors if the board state is GameOver or if the move is invalid.
+    /// 
+    /// Also updates the fields `en_passant_target`, `halfmoves`, `fullmoves`, `white_has_right_to_castle_kingside` etc.
+    /// Removes an en passant-ed pawn, and moves the rook in the event of a castle.
+    ///
+    /// Updating the castling fields when the king is checked is handled by `update_game_state()`.
+    /// This function should be called after the move has been performed but before the active colour is updated.
+    fn make_move(&mut self, mv: Move) -> Result<(), String> {
+        // Checks that the board state is InProgress or Check, else throws an error.
+        if !(self.state == BoardState::Active || self.state == BoardState::Check) {
+            let error = format!("The game is not in a state where a move can be made. Currently, the state is {:?}.", self.state);
+            return Err(error);
+        }
+        mv.valid(self)?;
+
+        // We move the piece!
+        let captured_piece = mv.piece_captured; // is None if none were captured
+        let moved_piece = mv.piece_moved;
+
+        self.array[mv.from.idx] = None;
+        match mv.promotion_choice {
+            Some(promotion_choice) => {
+                // En passant!
+                let mut promoted_piece = moved_piece.clone();
+                promoted_piece.piece_type = promotion_choice;
+                self.array[mv.pos_captured.unwrap().idx] = None;
+                self.array[mv.to.idx] = Some(promoted_piece); 
+            },
+            None => self.array[mv.to.idx] = Some(moved_piece),
+        }
+
+        // Halfmoves are reset if we move a pawn or capture a piece, otherwise incremented by one
+        if moved_piece.is_pawn() || captured_piece.is_some() {
+            self.halfmoves = 0;
+        } else {
+            self.halfmoves += 1;
+        }
+        // Fullmoves are incremented everytime black moves
+        if self.active_colour.is_black() {
+            self.fullmoves += 1;
+        }
+
+        match moved_piece.piece_type {
+            PieceType::King => {
+                // If the king performs a castling move, we need to move the rook as well.
+                // If the king moves, we need to disable future castling for the colour that moved.
+                match mv.to.idx {
+                    // Move rook if castling: 2 = c1, 6 = g1, 58 = c8, 62 = g8
+                    2 => {
+                        if self.white_has_right_to_castle_queenside {
+                            self.array[3] = self.array[0];
+                            self.array[0] = None;
+                        }
+                    }
+                    6 => {
+                        if self.white_has_right_to_castle_kingside {
+                            self.array[5] = self.array[7];
+                            self.array[7] = None;
+                        }
+                    }
+                    58 => {
+                        if self.black_has_right_to_castle_queenside {
+                            self.array[59] = self.array[56];
+                            self.array[56] = None;
+                        }
+                    }
+                    62 => {
+                        if self.black_has_right_to_castle_queenside {
+                            self.array[61] = self.array[63];
+                            self.array[63] = None;
+                        }
+                    }
+                    _ => {}
+                }
+
+                // Disable castling if the king moves.
+                match self.active_colour {
+                    Colour::White => {
+                        self.white_has_right_to_castle_queenside = false;
+                        self.white_has_right_to_castle_kingside = false;
+                    }
+                    Colour::Black => {
+                        self.black_has_right_to_castle_queenside = false;
+                        self.black_has_right_to_castle_kingside = false;
+                    }
+                }
+            }
+            PieceType::Rook => {
+                // If the rook moves, we need to disable castling for the correct colour and rook.
+                match mv.from.idx {
+                    // indices 0 = a1, 7 = h1, 56 = a8 and 63 = h8
+                    0 => {
+                        self.white_has_right_to_castle_queenside = false;
+                    }
+                    7 => {
+                        self.white_has_right_to_castle_kingside = false;
+                    }
+                    56 => {
+                        self.black_has_right_to_castle_queenside = false;
+                    }
+                    63 => {
+                        self.black_has_right_to_castle_kingside = false;
+                    }
+                    _ => {}
+                }
+            }
+            _default => {
+                // We also need to check if we capture either of the rooks at a1/h1/a8/h8,
+                // in which case we can no longer castle with them.
+                if captured_piece.is_some_and(|p| p.is_rook()) {
+                    match mv.to.idx {
+                        // indices 0 = a1, 7 = h1, 56 = a8 and 63 = h8
+                        0 => {
+                            self.white_has_right_to_castle_queenside = false;
+                        }
+                        7 => {
+                            self.white_has_right_to_castle_kingside = false;
+                        }
+                        56 => {
+                            self.black_has_right_to_castle_queenside = false;
+                        }
+                        63 => {
+                            self.black_has_right_to_castle_kingside = false;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        
+        let fen = self.to_fen();
+        let legal_moves = self.get_legal_moves();
+        // Save game state in history vector
+        self.history.push(HistoryEntry {
+            fen,
+            legal_moves,
+            last_move: mv.clone(),
+        });
+        
+        // Update board state
+        return Ok(())
+    }
+
+    fn _update_board_state(&mut self) {
+        assert!(self.state != BoardState::GameOver, "update_game_state() was called when the game had already ended.");
+
+        // It is the next colour's turn.
+        self.active_colour = self.active_colour.invert();
+
+        /* If the next thing to happen is not a promotion:
+        If the current game state has occurred 4 times before, enact the fivefold repetition rule (GameOver).
+        If the current game state is a case of insufficient material, declare the game a draw (GameOver).
+        If the king is in check and no correcting move can be made, the game is in checkmate with (GameOver).
+        If the king is in check and a correcting move can be made, the game is in check.
+        If the king is not in check yet no move can be made, the game is in stalemate (GameOver).
+        If there have been 75 moves since the last captured piece or moved pawn, enact the 75-move rule (GameOver).
+        Otherwise, the game is still in progress!
+
+        Note that the method `can_make_legal_move` primarily uses the function `get_possible_moves` which checks whether
+        some move puts the king in check when it is performed. A "possible" or "legal" move is thus defined as a move that
+        can be performed without putting the king at risk.
+        */
+
+        // Fivefold repetition rule.
+        if self.is_nfold_repetition(5) {
+            self.state = BoardState::GameOver;
+            self.game_over_reason = Some(GameOverReason::FivefoldRepetitionRule);
+            return
+        }
+
+        // 75-move rule.
+        if self.halfmoves >= 150 {
+            self.state = BoardState::GameOver;
+            self.game_over_reason = Some(GameOverReason::SeventyFiveMoveRule);
+            return
+        }
+
+        // Insufficient material.
+        let remaining_pieces = self.array.iter().flatten();
+        let remaining_pieces_count = remaining_pieces.clone().count();
+        if remaining_pieces_count < 5 {
+            let mut king_count = 0;
+            let mut bishop_count = 0;
+            let mut knight_count = 0;
+            for piece in remaining_pieces {
+                match piece.piece_type {
+                    PieceType::King => king_count += 1,
+                    PieceType::Bishop => bishop_count += 1,
+                    PieceType::Knight => knight_count += 1,
+                    _ => {}
+                }
+            }
+            if remaining_pieces_count == 2 && king_count == 2 || // 2 kings (+ 1 bishop or 1 knight)
+                remaining_pieces_count == 3 && king_count == 2 && (bishop_count == 1 || knight_count == 1)
+            {
+                self.state = BoardState::GameOver;
+                self.game_over_reason = Some(GameOverReason::InsufficientMaterial);
+                return;
+            } else if remaining_pieces_count == 4 && king_count == 2 && bishop_count == 2 {
+                // 2 kings + 2 bishops on the same colour
+                let mut bishop_loc = 64;
+                for idx in 0..63 {
+                    if self.array[idx].is_some_and(|p| p.is_bishop()) {
+                        if bishop_loc == 64 {
+                            bishop_loc = idx;
+                        } else if bishop_loc % 2 == idx % 2 {
+                            self.state = BoardState::GameOver;
+                            self.game_over_reason = Some(GameOverReason::InsufficientMaterial);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check, checkmate, stalemate and in progress.
+        if self._is_in_check(self.active_colour, false) {
+            if self._can_make_legal_move() {
+                self.state = BoardState::Check;
+                // Also disable castling for active_colour.
+                if self.active_colour.is_white() {
+                    self.white_has_right_to_castle_queenside = false;
+                    self.white_has_right_to_castle_kingside = false;
+                } else {
+                    self.black_has_right_to_castle_queenside = false;
+                    self.black_has_right_to_castle_kingside = false;
+                }
+            } else {
+                self.state = BoardState::GameOver;
+                self.game_over_reason = Some(GameOverReason::Checkmate);
+            }
+        } else {
+            if self._can_make_legal_move() {
+                self.state = BoardState::Active;
+            } else {
+                self.state = BoardState::GameOver;
+                self.game_over_reason = Some(GameOverReason::Stalemate);
+            }
+        }
+    }
+
+    /// Presumes that there is only one king of colour `colour`
+    fn _find_king(&self, colour: Colour) -> Result<Position, String> {
+        for (i, piece) in self.array.iter().enumerate() {
+            if piece.is_some_and(|p| p.is_king() && p.colour == colour) {
+                return Ok(Position::new_from_idx(i)?);
+            }
+        }
+        return Err(format!("The {:?} king is not on the board", colour));
+    }
+
+    /// Looking ahead is set to true if the current board is hypothetical
+    fn _is_in_check(&mut self, colour: Colour, looking_ahead: bool) -> bool {
+        let king_pos = match self._find_king(colour) {
+            Ok(pos) => pos,
+            Err(_) => return false,
+        };
+
+        // Iterate over pieces of the opposite colour and see if any attack the king.
+        for (i, piece) in self.array.clone().iter().enumerate() {
+            if piece.is_some_and(|p| p.colour != colour) {
+                let legal_moves = self._get_legal_moves_from_pos(Position::new_from_idx(i).unwrap(), looking_ahead).unwrap();
+                if legal_moves.iter().any(|mv| mv.to == king_pos) {
+                    return true;
+                }
+            }
+        }
+
+        // If we have found no cases where the king is in check, the king is not in check.
+        return false;
+    }
+}
+
+/// A library for running a game of chess. 
 ///
 /// % NOTE! Viewing in rustdoc, full descriptions for methods can be viewed under <a href="#implementations">Implementations</a> below. There you can also find links to the source code!
 ///
@@ -562,203 +1594,41 @@ pub struct HistoryEntry {
 /// * `can_enact_50_move_rule()` checks if the 50 move rule is applicable.
 #[derive(Clone, Debug)] // The clone derivation is necessary as it is used by try_move
 pub struct Game {
-    state: GameState,
-    game_over_reason: Option<GameOverReason>,
-    active_colour: Colour,
-    board: [Option<Piece>; 8 * 8],
-    history: Vec<HistoryEntry>,
-    halfmoves: u8, // used for implementing the 50 and 75-move rules
-    fullmoves: u32,
-    en_passant_target: Position, // Is set to a targetable position for en passant, when relevant, otherwise Position::NULL
-    white_has_right_to_castle_queenside: bool,
-    white_has_right_to_castle_kingside: bool,
-    black_has_right_to_castle_queenside: bool,
-    black_has_right_to_castle_kingside: bool,
+    board: Board,
 }
 
 /// Here we implement the main functions of our game.
 impl Game {
-    /// This is a constant used in the function `try_move` that specifies how far the engine should check for Check-states.
-    /// The value 1 should do since after 1 recursions, we have checked the current and the next move. In this time, we should discover all relevant Check-states.
-    const MAX_RECURSIONS: i32 = 2;
-
-    /// Initialises a new board with pieces.
+    /// Initializes a fresh game of chess
     pub fn new() -> Game {
-        // generate the pieces
-        let w_king = Some(Piece {
-            colour: Colour::White,
-            piece_type: PieceType::King,
-        });
-        let w_queen = Some(Piece {
-            colour: Colour::White,
-            piece_type: PieceType::Queen,
-        });
-        let w_rook = Some(Piece {
-            colour: Colour::White,
-            piece_type: PieceType::Rook,
-        });
-        let w_knight = Some(Piece {
-            colour: Colour::White,
-            piece_type: PieceType::Knight,
-        });
-        let w_bishop = Some(Piece {
-            colour: Colour::White,
-            piece_type: PieceType::Bishop,
-        });
-        let w_pawn = Some(Piece {
-            colour: Colour::White,
-            piece_type: PieceType::Pawn,
-        });
-
-        let b_king = Some(Piece {
-            colour: Colour::Black,
-            piece_type: PieceType::King,
-        });
-        let b_queen = Some(Piece {
-            colour: Colour::Black,
-            piece_type: PieceType::Queen,
-        });
-        let b_rook = Some(Piece {
-            colour: Colour::Black,
-            piece_type: PieceType::Rook,
-        });
-        let b_knight = Some(Piece {
-            colour: Colour::Black,
-            piece_type: PieceType::Knight,
-        });
-        let b_bishop = Some(Piece {
-            colour: Colour::Black,
-            piece_type: PieceType::Bishop,
-        });
-        let b_pawn = Some(Piece {
-            colour: Colour::Black,
-            piece_type: PieceType::Pawn,
-        });
-
-        // initializing board array
-        let board_init = [
-            w_rook, w_knight, w_bishop, w_queen, w_king, w_bishop, w_knight, w_rook, w_pawn,
-            w_pawn, w_pawn, w_pawn, w_pawn, w_pawn, w_pawn, w_pawn, None, None, None, None, None,
-            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-            None, None, None, None, None, None, None, None, None, None, None, None, None, b_pawn,
-            b_pawn, b_pawn, b_pawn, b_pawn, b_pawn, b_pawn, b_pawn, b_rook, b_knight, b_bishop,
-            b_queen, b_king, b_bishop, b_knight, b_rook,
-        ];
-
         Game {
-            /* initialise board, set active colour to white and state to in progress */
-            state: GameState::InProgress,
-            game_over_reason: None,
-            active_colour: Colour::White,
-            board: board_init,
-            history: vec![],
-            halfmoves: 0,
-            fullmoves: 0,
-            en_passant_target: Position::NULL,
-            white_has_right_to_castle_queenside: true,
-            white_has_right_to_castle_kingside: true,
-            black_has_right_to_castle_queenside: true,
-            black_has_right_to_castle_kingside: true,
+            board: Board::new(),
         }
     }
 
-    /// Returns the Forsyth-Edwards Notation (FEN) of the current position.
-    ///
-    /// See https://www.chess.com/terms/fen-chess for a detailed explanation on the notation.
-    ///
-    /// The en passant square is only included if some pawn can legally capture en passant.
-    pub fn fen(&self) -> String {
-        let mut fen = String::new();
+    /// Initializes a game of chess from the game's Forsyth-Edwards Notation (FEN).
+    /// 
+    /// See https://www.chess.com/terms/fen-chess for information about the notation.
+    /// 
+    /// Note: the threefold and fivefold repetition rules cannot be enacted for a game
+    /// that is initialized from FEN, since, reasonably, the engine does not know the
+    /// previous states of the game.
+    pub fn new_from_fen(fen: String) -> Result<Game,String> {
+        Ok(Game {
+            board: match Board::new_from_fen(fen) {
+                Ok(board) => board,
+                Err(e) => return Err(e),
+            },
+        })
+    }
 
-        // 1st field: piece placement
-        let mut none_count = 0; // no. of empty squares in a row
-        for rank in (0..8).rev() {
-            for file in 0..8 {
-                let idx = Position::idx(rank, file);
-                if self.board[idx].is_none() {
-                    none_count += 1;
-                } else {
-                    if none_count > 0 {
-                        // add empty square count to fen and reset
-                        fen.push_str(&none_count.to_string());
-                        none_count = 0;
-                    }
-
-                    // add piece to fen
-                    fen.push(self.board[idx].expect("is not none").to_char_colourcased());
-                }
-            }
-            if none_count > 0 {
-                // add empty square count to fen and reset
-                fen.push_str(&none_count.to_string());
-                none_count = 0;
-            }
-            if rank != 0 {
-                fen.push('/');
-            }
-        }
-
-        fen.push(' ');
-
-        // 2nd field: active colour
-        fen.push(self.active_colour.to_char());
-
-        fen.push(' ');
-
-        // 3rd field: castling rights
-        if self.white_has_right_to_castle_kingside {
-            fen.push('K')
-        }
-        if self.white_has_right_to_castle_queenside {
-            fen.push('Q')
-        }
-        if self.black_has_right_to_castle_kingside {
-            fen.push('k')
-        }
-        if self.black_has_right_to_castle_queenside {
-            fen.push('Q')
-        }
-        if fen.ends_with(' ') {
-            // no castling rights
-            fen.push('-');
-        }
-
-        fen.push(' ');
-
-        // 4th field: possible en passant target
-        if self.en_passant_target != Position::NULL {
-            // Check if this position is threatened by some pawn, otherwise do not include this
-            let dir = self.active_colour.pawn_dir() * -1;
-            let pos1 = self.en_passant_target.offset(dir, 1);
-            let piece1 = match pos1 {
-                Ok(pos) => self.get(pos).expect("validated"),
-                Err(_) => None,
-            };
-            let pos2 = self.en_passant_target.offset(dir, 1);
-            let piece2 = match pos2 {
-                Ok(pos) => self.get(pos).expect("validated"),
-                Err(_) => None,
-            };
-            if piece1.is_some_and(|p| p.is_pawn()) || piece2.is_some_and(|p| p.is_pawn()) {
-                fen.push_str(&self.en_passant_target.to_string());
-            } else {
-                fen.push('-');
-            }
-        } else {
-            fen.push('-');
-        }
-
-        fen.push(' ');
-
-        // 5th field: halfmoves
-        fen.push_str(&self.halfmoves.to_string());
-
-        fen.push(' ');
-
-        // 6th field: fullmoves
-        fen.push_str(&self.fullmoves.to_string());
-
-        return fen;
+    /// Returns the state of the game as Forsyth-Edwards Notation (FEN).
+    /// 
+    /// Implements caching, so it is not expensive to call this function many times.
+    /// 
+    /// See https://www.chess.com/terms/fen-chess for information about the notation.
+    pub fn to_fen(&mut self) -> String {
+        return self.board.to_fen();
     }
 
     /// Returns the `Option<Piece>` at position `pos`.
@@ -768,27 +1638,15 @@ impl Game {
     /// Errors if `pos` is invalid.
     pub fn get(&self, pos: Position) -> Result<Option<Piece>, String> {
         pos.valid()?;
-        return Ok(self.board[pos.idx]);
+        return Ok(self.board.array[pos.idx]);
     }
 
     /// Puts `piece` at position `pos`.
     ///
     /// Errors if `pos` is invalid or the placement results in a board with multiple kings.
-    /// (The engine does not support placing multiple kings of the same color).
     pub fn put(&mut self, pos: Position, piece: Piece) -> Result<(), String> {
         pos.valid()?;
-        if piece.piece_type == PieceType::King {
-            match self.find_king(piece.colour) {
-                Ok(_) => {
-                    return Err(format!(
-                        "The {:?} king is already on the board, a second one cannot be placed",
-                        piece.colour
-                    ))
-                }
-                Err(_) => {}
-            }
-        }
-        self.board[pos.idx] = Some(piece);
+        self.board.array[pos.idx] = Some(piece);
         // TODO update state appropriately if this upsets en passant, castling, check, checkmate or promotions
         return Ok(());
     }
@@ -800,65 +1658,39 @@ impl Game {
     /// Errors if `pos` is invalid.
     pub fn remove(&mut self, pos: Position) -> Result<Option<Piece>, String> {
         pos.valid()?;
-        let removed_piece = self.board[pos.idx];
-        self.board[pos.idx] = None;
+        let removed_piece = self.board.array[pos.idx];
+        self.board.array[pos.idx] = None;
         return Ok(removed_piece);
     }
 
     /// Returns true if the threefold repetition rule can be enacted, otherwise false.
-    pub fn is_threefold_repetition(&self) -> bool {
-        let mut count = 0;
-        let fen = self.fen();
-        'o: for entry in self.history.clone() {
-            let mut f1 = entry.fen.split(" ");
-            let mut f2 = fen.split(" ");
-            for _ in 0..4 {
-                if f1.next().expect("fen") != f2.next().expect("fen") {
-                    eprintln!("{:?},{:?}", fen, entry);
-                    continue 'o;
-                }
-            }
-            count += 1;
-        }
-        return count >= 2;
+    pub fn is_threefold_repetition(&mut self) -> bool {
+        return self.is_nfold_repetition(3)
     }
 
     /// Returns true if the fivefold repetition rule has been enacted, otherwise false.
-    pub fn is_fivefold_repetition(&self) -> bool {
-        let mut count = 0;
-        let fen = self.fen();
-        'o: for entry in self.history.clone() {
-            let mut f1 = entry.fen.split(" ");
-            let mut f2 = fen.split(" ");
-            for _ in 0..4 {
-                if f1.next().expect("fen") != f2.next().expect("fen") {
-                    eprintln!("{:?},{:?}", fen, entry);
-                    continue 'o;
-                }
-            }
-            count += 1;
-        }
-        return count >= 4;
+    pub fn is_fivefold_repetition(&mut self) -> bool {
+        return self.is_nfold_repetition(5)
     }
 
     /// Returns true if the 50-move rule can be enacted, otherwise false.
     pub fn is_50_move_rule(&self) -> bool {
-        return self.halfmoves >= 100;
+        return self.board.halfmoves >= 100;
     }
 
     /// Returns true if the 75-move rule has been enacted, otherwise false.
     pub fn is_75_move_rule(&self) -> bool {
-        return self.halfmoves >= 150;
+        return self.board.halfmoves >= 150;
     }
 
     /// Returns true if the game is over, otherwise false.
-    pub fn is_gameover(&self) -> bool {
-        return self.state == GameState::GameOver;
+    pub fn is_game_over(&self) -> bool {
+        return self.state == BoardState::GameOver;
     }
 
     /// Returns true if the active colour's king is checked, otherwise false.
     pub fn is_check(&self) -> bool {
-        return self.state == GameState::Check;
+        return self.state == BoardState::Check;
     }
 
     /// Returns true if the active colour's king is checkmated, otherwise false.
@@ -870,492 +1702,32 @@ impl Game {
 
     /// Submits a manual draw and puts the game in game over
     pub fn submit_draw(&mut self) {
-        self.state = GameState::GameOver;
+        self.state = BoardState::GameOver;
         self.game_over_reason = Some(GameOverReason::ManualDraw);
     }
 
-    /// If the game is not over, try to perform the move `from_str` to `to_str`.
-    ///
-    /// `from_str` and `to_str` are parsed as XF where X is a character a-h and F is a number 1-8.
+    /// If the game is not over, try to perform the move `mv`.
     ///
     /// Errors if the move is not legal, the game is over or the input is invalid.
-    pub fn make_move(&mut self, from_str: &str, to_str: &str) -> Result<GameState, String> {
-        // parse from_str
-        let from_pos = match Position::parse_str(&from_str) {
-            Ok(result) => result,
-            Err(string) => return Err(string),
-        };
+    pub fn make_move(&mut self, mv: Move) -> Result<BoardState, String> {
+        self.board.make_move(mv)?;
 
-        // parse to_str
-        let to_pos = match Position::parse_str(&to_str) {
-            Ok(result) => result,
-            Err(string) => return Err(string),
-        };
-
-        return self.make_move_pos(from_pos, to_pos);
-    }
-
-    /// If the game is not over, try to perform a move between Positions `from_pos` to `to_pos`.
-    ///
-    /// Errors if the move is not legal, the game is over or the input is invalid.
-    pub fn make_move_pos(
-        &mut self,
-        from_pos: Position,
-        to_pos: Position,
-    ) -> Result<GameState, String> {
-        // Checks that the game state is InProgress or Check, else throws an error.
-        if !(self.state == GameState::InProgress || self.state == GameState::Check) {
-            let error = format!("The game is not in a state where a move can be made. Currently, the state is {:?}.", self.state);
-            return Err(error);
-        }
-
-        from_pos.valid()?;
-        to_pos.valid()?;
-
-        // check that the the piece is not None and is of the right colour
-        match self.board[from_pos.idx] {
-            None => {
-                return Err(
-                    "There is no piece on the square you are trying to move from".to_owned(),
-                )
-            }
-            Some(piece) => {
-                if piece.colour != self.active_colour {
-                    return Err("It is not this colour's turn!".to_owned());
-                }
-            }
-        }
-
-        // Generates a list of all the legal moves that the piece in question can perform.
-        let possible_moves = self.get_possible_moves(from_pos)?;
-
-        // Check if our position is a possible move for this piece.
-        if !possible_moves
-            .iter() // Creates an iterable of positions.
-            .any(|pos| pos == &to_pos)
-        {
-            return Err("Illegal move. (This might mean that this piece cannot move this way, or that it puts your king in check!)".to_owned());
-        } else {
-            // We move the piece!
-            self._perfom_move(from_pos, to_pos)?;
-            // and update the game state (and maybe active colour)
-            self.update_game_state();
-
-            return Ok(self.state);
-        }
-    }
-
-    /// Once a move is deemed okay, this method performs the move between from_pos and to_pos.
-    ///
-    /// Also updates the fields `en_passant_target`, `halfmoves`, `fullmoves`, `white_has_right_to_castle_kingside` etc.
-    /// Removes an en passant-ed pawn, and moves the rook in the event of a castle.
-    ///
-    /// Updating the castling fields when the king is checked is handled by `update_game_state()`.
-    /// This function should be called after the move has been performed but before the active colour is updated.
-    fn _perfom_move(&mut self, from_pos: Position, to_pos: Position) -> Result<(), String> {
-        // We move the piece!
-        let captured_piece: Option<Piece> = self.get(to_pos)?; // is None if none were captured
-        let moved_piece = self
-            .get(from_pos)?
-            .expect("is never called trying to move an empty piece");
-
-        // Save game state in history vector
-        self.history.push(HistoryEntry {
-            fen: self.fen(),
-            from: from_pos.to_string(),
-            to: to_pos.to_string(),
-            piece_moved: moved_piece,
-            piece_captured: captured_piece,
-        });
-
-        self.remove(from_pos)?;
-        self.put(to_pos, moved_piece)?;
-
-        // Halfmoves are reset if we move a pawn or capture a piece, otherwise incremented by one
-        if moved_piece.is_pawn() || captured_piece.is_some() {
-            self.halfmoves = 0;
-        } else {
-            self.halfmoves += 1;
-        }
-        // Fullmoves are incremented everytime black moves
-        if self.active_colour.is_black() {
-            self.fullmoves += 1;
-        }
-
-        if moved_piece.is_pawn() {
-            // For the pawn we need to check if the move was an en passant move
-            // (in which case we should capture the correct pawn, which is not at to_pos)
-            // or else if the move triggers a state in which the opponent can en passant
-            let dir = self.active_colour.pawn_dir();
-            if to_pos == self.en_passant_target {
-                let captured_pawn_pos: Position = to_pos
-                    .offset(-dir, 0)
-                    .expect("a pawn cannot move backwards");
-                self.remove(captured_pawn_pos)?;
-            }
-
-            if to_pos.rank.abs_diff(from_pos.rank) == 2 {
-                // (Occurs if a pawn moved two spaces forward.)
-                self.en_passant_target = to_pos
-                    .offset(-dir, 0)
-                    .expect("a pawn cannot move backwards");
-            } else {
-                self.en_passant_target = Position::NULL; // reset if a pawn did not just move two spaces forward
-            }
-        } else {
-            self.en_passant_target = Position::NULL;
-        }
-        match moved_piece.piece_type {
-            PieceType::King => {
-                // If the king performs a castling move, we need to move the rook as well.
-                // If the king moves, we need to disable future castling for the colour that moved.
-                match to_pos.idx {
-                    // Move rook if castling: 2 = c1, 6 = g1, 58 = c8, 62 = g8
-                    2 => {
-                        if self.white_has_right_to_castle_queenside {
-                            self.board[3] = self.board[0];
-                            self.board[0] = None;
-                        }
-                    }
-                    6 => {
-                        if self.white_has_right_to_castle_kingside {
-                            self.board[5] = self.board[7];
-                            self.board[7] = None;
-                        }
-                    }
-                    58 => {
-                        if self.black_has_right_to_castle_queenside {
-                            self.board[59] = self.board[56];
-                            self.board[56] = None;
-                        }
-                    }
-                    62 => {
-                        if self.black_has_right_to_castle_queenside {
-                            self.board[61] = self.board[63];
-                            self.board[63] = None;
-                        }
-                    }
-                    _ => {}
-                }
-
-                // Disable castling if the king moves.
-                match self.active_colour {
-                    Colour::White => {
-                        self.white_has_right_to_castle_queenside = false;
-                        self.white_has_right_to_castle_kingside = false;
-                    }
-                    Colour::Black => {
-                        self.black_has_right_to_castle_queenside = false;
-                        self.black_has_right_to_castle_kingside = false;
-                    }
-                }
-            }
-            PieceType::Rook => {
-                // If the rook moves, we need to disable castling for the correct colour and rook.
-                match from_pos.idx {
-                    // indices 0 = a1, 7 = h1, 56 = a8 and 63 = h8
-                    0 => {
-                        self.white_has_right_to_castle_queenside = false;
-                    }
-                    7 => {
-                        self.white_has_right_to_castle_kingside = false;
-                    }
-                    56 => {
-                        self.black_has_right_to_castle_queenside = false;
-                    }
-                    63 => {
-                        self.black_has_right_to_castle_kingside = false;
-                    }
-                    _ => {}
-                }
-            }
-            _default => {
-                // We also need to check if we capture either of the rooks at a1/h1/a8/h8,
-                // in which case we can no longer castle with them.
-                if captured_piece.is_some_and(|p| p.is_rook()) {
-                    match to_pos.idx {
-                        // indices 0 = a1, 7 = h1, 56 = a8 and 63 = h8
-                        0 => {
-                            self.white_has_right_to_castle_queenside = false;
-                        }
-                        7 => {
-                            self.white_has_right_to_castle_kingside = false;
-                        }
-                        56 => {
-                            self.black_has_right_to_castle_queenside = false;
-                        }
-                        63 => {
-                            self.black_has_right_to_castle_kingside = false;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        return Ok(());
-    }
-
-    /// Updates the active colour and updates the game state for newly active colour.
-    ///
-    /// Is called when make_move is done.
-    fn update_game_state(&mut self) {
-        if self.is_gameover() {
-            panic!("update_game_state() was called when the game had already ended.")
-        }
-
-        /* If there is a pawn that needs to be promoted (is at the end of the board),
-        the method will put the game into GameState::WaitingOnPromotionChoice and skip the rest of the state-checking.
-        */
-        if self.find_pawn_to_promote().is_ok() {
-            self.state = GameState::WaitingOnPromotionChoice;
-            return;
-        }
-
-        // Otherwise it is the next colour's turn
-        self.active_colour = self.active_colour.invert();
-
-        /* If the next thing to happen is not a promotion:
-        If the current game state has occurred 4 times before, enact the fivefold repetition rule (GameOver).
-        If the current game state is a case of insufficient material, declare the game a draw (GameOver).
-        If the king is in check and no correcting move can be made, the game is in checkmate with (GameOver).
-        If the king is in check and a correcting move can be made, the game is in check.
-        If the king is not in check yet no move can be made, the game is in stalemate (GameOver).
-        If there have been 75 moves since the last captured piece or moved pawn, enact the 75-move rule (GameOver).
-        Otherwise, the game is still in progress!
-
-        Note that the method `can_make_legal_move` primarily uses the function `get_possible_moves` which checks whether
-        some move puts the king in check when it is performed. A "possible" or "legal" move is thus defined as a move that
-        can be performed without putting the king at risk.
-        */
-
-        // Fivefold repetition rule.
-        if self.is_fivefold_repetition() {
-            self.state = GameState::GameOver;
-            self.game_over_reason = Some(GameOverReason::FivefoldRepetitionRule);
-            return;
-        }
-
-        // Insufficient material.
-        let remaining_pieces = self.board.iter().flatten();
-        let remaining_pieces_count = remaining_pieces.clone().count();
-        if remaining_pieces_count < 5 {
-            let mut king_count = 0;
-            let mut bishop_count = 0;
-            let mut knight_count = 0;
-            for piece in remaining_pieces {
-                match piece.piece_type {
-                    PieceType::King => king_count += 1,
-                    PieceType::Bishop => bishop_count += 1,
-                    PieceType::Knight => knight_count += 1,
-                    _ => {}
-                }
-            }
-            if remaining_pieces_count == 2 && king_count == 2 || // 2 kings (+ 1 bishop or 1 knight)
-                remaining_pieces_count == 3 && king_count == 2 && (bishop_count == 1 || knight_count == 1)
-            {
-                self.state = GameState::GameOver;
-                self.game_over_reason = Some(GameOverReason::InsufficientMaterial);
-                return;
-            } else if remaining_pieces_count == 4 && king_count == 2 && bishop_count == 2 {
-                // 2 kings + 2 bishops on the same colour
-                let mut bishop_loc = 64;
-                for idx in 0..63 {
-                    if self.board[idx].is_some_and(|p| p.is_bishop()) {
-                        if bishop_loc == 64 {
-                            bishop_loc = idx;
-                        } else if bishop_loc % 2 == idx % 2 {
-                            self.state = GameState::GameOver;
-                            self.game_over_reason = Some(GameOverReason::InsufficientMaterial);
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Check, checkmate, stalemate and in progress.
-        if self.is_in_check(self.active_colour, 1) {
-            // TODO why 1?
-            if self._can_make_legal_move() {
-                self.state = GameState::Check;
-                // Also disable castling for active_colour.
-                if self.active_colour.is_white() {
-                    self.white_has_right_to_castle_queenside = false;
-                    self.white_has_right_to_castle_kingside = false;
-                } else {
-                    self.black_has_right_to_castle_queenside = false;
-                    self.black_has_right_to_castle_kingside = false;
-                }
-            } else {
-                self.state = GameState::GameOver;
-                self.game_over_reason = Some(GameOverReason::Checkmate);
-            }
-        } else {
-            if self._can_make_legal_move() {
-                self.state = GameState::InProgress;
-            } else {
-                self.state = GameState::GameOver;
-                self.game_over_reason = Some(GameOverReason::Stalemate);
-            }
-        }
-
-        // 75-move rule.
-        if !self.is_checkmate() && self.halfmoves >= 150 {
-            self.state = GameState::GameOver;
-            self.game_over_reason = Some(GameOverReason::SeventyFiveMoveRule);
-        }
-    }
-
-    /// Returns true if the `colour`'s king is checked, otherwise false.
-    ///
-    /// If `colour` has no king on the board, returns false.
-    ///
-    /// Note that this function calls `get_possible_moves()` again which calls this function.
-    /// To avoid infinite recursion, we pass the variable `recursion_order` which is incremented by `get_possible_moves`.
-    fn is_in_check(&self, colour: Colour, recursion_order: i32) -> bool {
-        let king_pos = match self.find_king(colour) {
-            Ok(pos) => pos,
-            Err(_) => return false,
-        };
-
-        // Iterate over pieces of the opposite colour and see if any attack the king.
-        for (i, piece) in self.board.iter().enumerate() {
-            if piece.is_some_and(|p| p.colour != colour) {
-                let possible_moves = self
-                    ._get_possible_moves(
-                        Position::new_from_idx(i).expect("enumerated"),
-                        recursion_order,
-                    )
-                    .expect("enumerated");
-                if possible_moves.iter().any(|pos| pos == &king_pos) {
-                    return true;
-                }
-            }
-        }
-
-        // If we have found no cases where the king is in check, the king is not in check.
-        return false;
-    }
-
-    /// Returns true if active colour can make any move, otherwise false.
-    ///
-    /// This primarily relies on the method `_get_possible_moves` which implements checking whether some move would put the king in check.
-    /// Is implemented in checkmate and stalemate-checking.
-    fn _can_make_legal_move(&self) -> bool {
-        for (i, piece) in self.board.iter().enumerate() {
-            if piece.is_some_and(|p| p.colour == self.active_colour) {
-                let possible_moves = self
-                    ._get_possible_moves(Position::new_from_idx(i).expect("enumerated"), 0)
-                    .expect("enumerated");
-                if possible_moves.len() > 0 {
-                    // We have found at least one possible move and return true
-                    return true;
-                }
-            }
-        }
-
-        // We have, after iterating over every piece, found no possible move and return false
-        return false;
-    }
-
-    /// Finds the king of `colour`'s position and returns it
-    ///
-    /// Errors if the king is not on the board
-    fn find_king(&self, colour: Colour) -> Result<Position, String> {
-        for (i, piece) in self.board.iter().enumerate() {
-            if piece.is_some_and(|p| p.is_king() && p.colour == colour) {
-                return Ok(Position::new_from_idx(i)?);
-            }
-        }
-        return Err(format!("The {:?} king is not on the board", colour));
-    }
-
-    /// Returns the position of the active colour's pawn that should be promoted.
-    ///
-    /// Errors if there is no pawn to promote.
-    fn find_pawn_to_promote(&self) -> Result<Position, String> {
-        let rank = match self.active_colour {
-            // last rank for the pawn colour
-            Colour::White => 7,
-            Colour::Black => 0,
-        };
-        for file in 0..7 {
-            // all files for the rank
-            if self
-                .get(Position::new(rank, file)?)?
-                .is_some_and(|p| p.is_pawn())
-            {
-                // This engine will never end up in a situation where there are two panws on the last rank.
-                return Ok(Position::new(rank, file)?);
-            }
-        }
-        // Otherwise there is none
-        return Err("There is no pawn to promote".to_owned());
-    }
-
-    /// Set the piece type that a pawn becames following a promotion.
-    ///
-    /// Errors if the type is a king or pawn, or if the game is not waiting for a promotion choice.
-    /// 
-    /// # Example code
-    /// 
-    /// ```rust
-    /// # use chess_engine::*;
-    /// # let mut game = Game::new();
-    /// match game.get_game_state() {
-    ///     /// ...
-    ///     GameState::WaitingOnPromotionChoice => {
-    ///         let input = /* text input */ "queen";
-    ///         let choice = PieceType::from_str(input);
-    ///         /* or determine the choice in some other way */
-    ///         assert!(choice.is_ok());
-    ///         let result = game.set_promotion(choice.unwrap());
-    ///         assert!(result.is_ok());
-    ///     }
-    ///     # _ => {}
-    /// }
-    /// ```
-    pub fn set_promotion(&mut self, piece_type: PieceType) -> Result<GameState, String> {
-        if self.state != GameState::WaitingOnPromotionChoice {
-            return Err(format!(
-                "The game is not currently waiting for a promotion. Currently, the state is {:?}.",
-                self.state
-            ));
-        }
-
-        match piece_type {
-            PieceType::King => return Err("You can't promote a pawn to a king!".to_owned()),
-            PieceType::Pawn => return Err("You can't promote a pawn to a pawn!".to_owned()),
-            _ => {}
-        };
-
-        self.put(
-            self.find_pawn_to_promote()?,
-            Piece {
-                piece_type,
-                colour: self.active_colour,
-            },
-        )?;
-
-        self.active_colour = self.active_colour.invert();
-
-        self.update_game_state();
-        return Ok(self.state);
+        Ok(self.board.state)
     }
 
     /// Get the current game state.
-    pub fn get_game_state(&self) -> GameState {
-        self.state
+    pub fn get_game_state(&self) -> BoardState {
+        self.board.state
     }
 
     /// Get the game over reason. Is None if the game is not over.
     pub fn get_game_over_reason(&self) -> Option<GameOverReason> {
-        self.game_over_reason
+        self.board.game_over_reason
     }
 
     /// Get the active colour.
     pub fn get_active_colour(&self) -> Colour {
-        self.active_colour
+        self.board.active_colour
     }
 
     /// Get a copy of the board as a vector of length 8 * 8 of `Option<Piece>`-s.
@@ -1366,374 +1738,41 @@ impl Game {
     /// 
     /// TODO Write doctest!
     pub fn get_board(&self) -> [Option<Piece>; 8 * 8] {
-        return self.board.clone();
+        return self.board.array.clone();
     }
 
     /// Get a vector of contents `HistoryEntry` which denote the engine's recorded history for this game.
     pub fn get_history(&self) -> Vec<HistoryEntry> {
-        return self.history.clone();
+        return self.board.history.clone();
     }
 
-    /// Returns all possible new positions of the piece at position `pos` as a vector of positions.
-    ///
-    /// Errors if `pos` is not valid.
-    pub fn get_possible_moves(&self, pos: Position) -> Result<Vec<Position>, String> {
-        // This method just relays the position to _get_possible_moves with recursion_order 0.
-        return self._get_possible_moves(pos, 0);
+    /// Returns all legal moves in the game
+    /// 
+    /// Panics if the game is over.
+    pub fn get_legal_moves(&mut self) -> Vec<Move> {
+        self.board.get_legal_moves()
     }
 
     /// Returns all possible new positions of the piece at position `pos`, that also capture a piece, as a vector of positions.
     ///
     /// Errors if `pos` is not valid.
-    pub fn get_possible_capture_moves(&self, pos: Position) -> Result<Vec<Position>, String> {
+    pub fn get_possible_capture_moves(&mut self) -> Result<Vec<Move>, String> {
         return Ok(self
-            ._get_possible_moves(pos, 0)?
+            .get_legal_moves()
             .into_iter()
-            .filter(|to_pos| self.is_capture(pos, *to_pos).expect("pos is ok"))
+            .filter(|to_pos| to_pos.is_capture(self).unwrap())
             .collect());
     }
 
     /// Returns all possible new positions of the piece at position `pos`, that also do not capture a piece, as a vector of positions.
     ///
     /// Errors if `pos` is not valid.
-    pub fn get_possible_non_capture_moves(&self, pos: Position) -> Result<Vec<Position>, String> {
+    pub fn get_possible_non_capture_moves(&self, pos: Position) -> Result<Vec<Move>, String> {
         return Ok(self
-            ._get_possible_moves(pos, 0)?
+            .get_legal_moves()
             .into_iter()
-            .filter(|to_pos| !self.is_capture(pos, *to_pos).expect("pos is ok"))
+            .filter(|mv| mv.is_capture(&mut self.board).unwrap())
             .collect());
-    }
-
-    /// If a piece is standing on the given tile, this method returns all possible new positions of that piece.
-    ///
-    /// Takes the arguments `pos` of type Position and `recursion_order`. Put `recursion_order` to 0 if you do not know what you are doing.
-    /// `recursion_order` is an auxiliary variable that prevents the function from checking for potential Check-states further in the future than MAX_RECURSIONS.
-    fn _get_possible_moves(
-        &self,
-        pos: Position,
-        mut recursion_order: i32,
-    ) -> Result<Vec<Position>, String> {
-        pos.valid()?;
-
-        // Increment recursion_order. See docstring for details.
-        recursion_order += 1;
-
-        // Get piece. If it is None, it cannot move so return an empty vector.
-        let piece: Piece = match self.get(pos)? {
-            None => return Ok(vec![]),
-            Some(piece) => piece,
-        };
-
-        // Start listing possible moves.
-        let mut possible_moves: Vec<Position> = Vec::with_capacity(60);
-
-        // For each piece_type, follow some set of rules.
-        /* This function declares how pieces can move, `try_move` tries if the piece can move somewhere.
-            Design philosophy:
-            - Generate directions for how all pieces can move.
-            - Then, iterate over every direction using `try_move` (see the function for details)
-                which returns true if the piece can move to the arrived to position (or capture there).
-            - If the piece can move there, add the move to the list of possible moves.
-            - For pawns, check that the move captures only when appropriate.
-            - Castling is hard-coded.
-        */
-        match piece.piece_type {
-            PieceType::King => {
-                // Kings can move all directions but only one distance.
-                // Kings can also castle if nothing has happened in the game that disables this.
-                // (See comments on `struct Game` fields for details.)
-
-                // Normal movement.
-                for (rank_step, file_step) in [
-                    (1, 1),
-                    (1, 0),
-                    (1, -1),
-                    (0, 1),
-                    (0, -1),
-                    (-1, 1),
-                    (-1, 0),
-                    (-1, -1),
-                ] {
-                    if self.try_move(pos, rank_step, file_step, 1, recursion_order) {
-                        possible_moves.push(pos.offset(rank_step, file_step)?);
-                    }
-                }
-
-                // Castling.
-                // (One case per castling opportunity, since they have hardcoded positioning.)
-                match piece.colour {
-                    Colour::White => {
-                        let king_pos = Position::new(0, 4).unwrap();
-                        if self.white_has_right_to_castle_queenside {
-                            // Boolean is true iff the king is at e1 and the rook is at a1.
-                            // Check if b1 [idx 1], c1 [idx 2], and d1 [idx 3] are free.
-                            if self.board[1].is_none()
-                                && self.board[2].is_none()
-                                && self.board[3].is_none()
-                            {
-                                // In that case check if the king is checked on the way to castling at c1.
-                                let mut ok = true;
-                                for i in 1..=2 {
-                                    if !self.try_move(king_pos, 0, -i, 1, recursion_order) {
-                                        ok = false;
-                                    }
-                                }
-                                if ok {
-                                    possible_moves.push(Position::new(0, 2).unwrap());
-                                }
-                            }
-                        }
-                        if self.white_has_right_to_castle_kingside {
-                            // Boolean is true iff the king is at e1 and the rook is at h1.
-                            // Check if f1 [idx 5] and g1 [idx 6] are free.
-                            if self.board[5].is_none() && self.board[6].is_none() {
-                                // In that case check if the king is checked on the way to castling at g1.
-                                let mut ok = true;
-                                for i in 1..=2 {
-                                    if !self.try_move(king_pos, 0, i, 1, recursion_order) {
-                                        ok = false;
-                                    }
-                                }
-                                if ok {
-                                    possible_moves.push(Position::new(0, 6).unwrap());
-                                }
-                            }
-                        }
-                    }
-                    Colour::Black => {
-                        let king_pos = Position::new(7, 4).unwrap();
-                        if self.black_has_right_to_castle_queenside {
-                            // Boolean is true iff the king is at e8 and the rook is at a8.
-                            // Check if b8 [idx 57], c8 [idx 58] and d8 [idx 59] are free.
-                            if self.board[57].is_none()
-                                && self.board[58].is_none()
-                                && self.board[59].is_none()
-                            {
-                                let mut ok = true;
-                                for i in 1..=2 {
-                                    if !self.try_move(king_pos, 0, -i, 1, recursion_order) {
-                                        ok = false;
-                                    }
-                                }
-                                if ok {
-                                    possible_moves.push(Position::new(7, 2).unwrap());
-                                }
-                            }
-                        }
-                        if self.black_has_right_to_castle_kingside {
-                            // Boolean is true iff the king is at d8 and the rook is at h8.
-                            // Check if f8 [idx 61] and g8 [idx 62] are free.
-                            if self.board[61].is_none() && self.board[62].is_none() {
-                                // In that case check if the king is checked on the way to castling at g8.
-                                let mut ok = true;
-                                for i in 1..=2 {
-                                    if !self.try_move(king_pos, 0, i, 1, recursion_order) {
-                                        ok = false;
-                                    }
-                                }
-                                if ok {
-                                    possible_moves.push(Position::new(7, 6).unwrap());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            PieceType::Queen => {
-                // Queens can move all directions and however far they like. (The board is size 8.)
-                for (rank_step, file_step) in [
-                    (1, 1),
-                    (1, 0),
-                    (1, -1),
-                    (0, 1),
-                    (0, -1),
-                    (-1, 1),
-                    (-1, 0),
-                    (-1, -1),
-                ] {
-                    for steps in 1..8 {
-                        if self.try_move(pos, rank_step, file_step, steps, recursion_order) {
-                            possible_moves.push(pos.offset(rank_step * steps, file_step * steps)?)
-                        } else {
-                            break;
-                        }
-                    }
-                }
-            }
-            PieceType::Bishop => {
-                // Bishops can move all diagonal directions and however far they like. (The board is size 8.)
-                for (rank_step, file_step) in [(1, 1), (1, -1), (-1, 1), (-1, -1)] {
-                    for steps in 1..8 {
-                        if self.try_move(pos, rank_step, file_step, steps, recursion_order) {
-                            possible_moves.push(pos.offset(rank_step * steps, file_step * steps)?)
-                        } else {
-                            break;
-                        }
-                    }
-                }
-            }
-            PieceType::Knight => {
-                // Knight can move according to eight movesets.
-                for (rank_step, file_step) in [
-                    (2, 1),
-                    (2, -1),
-                    (1, 2),
-                    (1, -2),
-                    (-1, 2),
-                    (-1, -2),
-                    (-2, 1),
-                    (-2, -1),
-                ] {
-                    if self.try_move(pos, rank_step, file_step, 1, recursion_order) {
-                        possible_moves.push(pos.offset(rank_step, file_step)?);
-                    }
-                }
-            }
-            PieceType::Rook => {
-                // Rooks can move all non-diagonal directions and however far they like. (The board is size 8.)
-                for (rank_step, file_step) in [(1, 0), (0, 1), (0, -1), (-1, 0)] {
-                    for steps in 1..8 {
-                        if self.try_move(pos, rank_step, file_step, steps, recursion_order) {
-                            possible_moves.push(pos.offset(rank_step * steps, file_step * steps)?)
-                        } else {
-                            break;
-                        }
-                    }
-                }
-            }
-            PieceType::Pawn => {
-                // Pawns can move forward once, twice if they are on their first rank
-                // Pawns can also capture diagonally, including en passant
-                let dir = piece.colour.pawn_dir();
-                let is_on_first_rank =
-                    piece.is_white() && pos.rank == 1 || piece.is_black() && pos.rank == 6;
-
-                // forward direction
-                for i in 1..=2 {
-                    if self.try_move(pos, dir, 0, i, recursion_order) {
-                        let new_pos = pos.offset(dir * i, 0)?;
-                        if !self.is_capture(pos, new_pos)? {
-                            // pawns cannot capture forwards
-                            possible_moves.push(new_pos);
-                        }
-                    }
-                    if !is_on_first_rank {
-                        break;
-                    }
-                }
-
-                // diagonal direction
-                for i in [-1, 1] {
-                    if self.try_move(pos, dir, i, 1, recursion_order) {
-                        let new_pos = pos.offset(dir, i)?;
-                        if self.is_capture(pos, new_pos)? {
-                            // pawns must capture diagonally (en passant included in this check)
-                            possible_moves.push(new_pos);
-                        }
-                    }
-                }
-            }
-        }
-        return Ok(possible_moves);
-    }
-
-    /// Tries to offset (move) a piece at `from_pos` by `(rank_step, file_step)*steps`.
-    ///
-    /// Returns true if the move is not obstructed and does not put the king in check.
-    ///
-    /// Takes as input `recursion_order` too, which is an integer describing which order in the recursion this iteration of try_move is.
-    /// If the iteration is higher than MAX_RECURSIONS, this function will not check whether a move implies putting the king in check.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `from_pos` is not the position of a piece
-    fn try_move(
-        &self,
-        from_pos: Position,
-        rank_step: i32,
-        file_step: i32,
-        steps: i32,
-        recursion_order: i32,
-    ) -> bool {
-        if from_pos.valid().is_err() {
-            panic!("try_move was called from an invalid from_pos");
-        }
-        let moved_piece = match self.board[from_pos.idx] {
-            Some(piece) => piece,
-            None => panic!(
-                "try_move was called trying to move a piece from a tile where there is no piece!"
-            ),
-        };
-
-        // Generate new position and check if it is reachable (not obstructed).
-        // If the position captures a piece on its last step, the position is reachable.
-        let mut to_pos = from_pos.clone();
-        for i in 1..=steps {
-            match to_pos.offset_self(rank_step, file_step) {
-                Err(_) => return false, // outside board
-                _ => {}
-            }
-            match self.get(to_pos).expect("pos is ok") {
-                Some(attacked_piece) => {
-                    if i != steps {
-                        // obstructed by a piece before the last step
-                        return false;
-                    } else if moved_piece.colour == attacked_piece.colour {
-                        // obstructed by a piece of the own colour
-                        return false;
-                    } else {
-                        // otherwise we are at the final step and found an opponent's piece
-                        break;
-                    }
-                }
-                None => continue, // empty, keep moving
-            }
-        } // If we exit the for-loop, to_pos is reachable.
-
-        // If a move is found to move to a space, this function will check whether the move puts the own king in check by calling _is_check on the new board.
-        // This step is skipped if the recursion order is greater than MAX_RECURSIONS.
-
-        if recursion_order >= Game::MAX_RECURSIONS {
-            // We do not care if the position puts the king in check
-            return true;
-        }
-
-        // Clone into a new game to try the movement in that game
-        let mut game_clone = self.clone();
-        match game_clone._perfom_move(from_pos, to_pos) {
-            // does not update active_colour
-            Ok(_) => {}
-            Err(_) => return false,
-        };
-        game_clone.active_colour = game_clone.active_colour.invert();
-        return !game_clone.is_in_check(game_clone.active_colour.invert(), recursion_order);
-        // the move is valid if it does not put the king in check
-    }
-
-    /// Returns true if a move from `from_pos` to `to_pos` captures a piece, otherwise false.
-    ///
-    /// Does not care if the move is valid.
-    ///
-    /// Checks the en passant case, too.
-    fn is_capture(&self, from_pos: Position, to_pos: Position) -> Result<bool, String> {
-        let p1 = match self.get(from_pos)? {
-            Some(piece) => piece,
-            None => return Err("There is no piece at from_pos".to_owned()),
-        };
-        let p2 = match self.get(to_pos)? {
-            Some(piece) => piece,
-            None => {
-                // The move is moving into an empty space, check if it is en passant
-                if to_pos == self.en_passant_target && p1.is_pawn() {
-                    return Ok(true); // en passant
-                }
-                return Ok(false); // not a capture
-            }
-        };
-        if p1.colour != p2.colour {
-            return Ok(true); // capture (enemy piece)
-        }
-        return Ok(false); // not a capture (own piece)
     }
 }
 
@@ -1780,13 +1819,6 @@ impl fmt::Display for Game {
         output.push_str("|:-------------:|");
 
         write!(f, "{}", output)
-    }
-}
-
-impl fmt::Display for Colour {
-    // Make the formatter print colours fancily outside of debug mode.
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
     }
 }
 
