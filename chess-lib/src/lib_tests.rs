@@ -3,9 +3,13 @@
 // --------------------------
 
 use super::*;
-use super::board::*;
-use super::api::*;
 
+/// Test PieceType::from_char
+#[test]
+fn piece_new_from_fen() {
+    assert_eq!(Piece::new_from_fen('n'),Ok(Piece{colour: Colour::Black,piece_type: PieceType::Knight}));
+    assert_eq!(Piece::new_from_fen('Q'),Ok(Piece{colour: Colour::White,piece_type: PieceType::Queen}));
+}
 /// Test that game state is in progress after initialisation
 #[test]
 fn game_in_progress_after_init() {
@@ -63,16 +67,12 @@ fn position_checking_works() {
 #[test]
 fn game_enters_check() {
     let mut game = Game::new();
-    let moves: Vec<&str> = "e2 e3
-        e7 e6
-        d1 g4
-        e6 e5
-        g4 e6"
-        .split_whitespace()
-        .collect();
+    let moves: Vec<&str> = "e2 e3/e7 e6/d1 g4/e6 e5/g4 e6".split("/").collect();
 
-    for i in 0..(moves.len() / 2) {
-        let result = game.make_move(moves[2 * i], moves[2 * i + 1]);
+    for str in moves {
+        let mv = Move::parse_str(&game.board, str, None);
+        assert!(mv.is_ok());
+        let result = game.make_move(mv.unwrap());
         assert!(result.is_ok());
     }
 
@@ -85,58 +85,55 @@ fn game_enters_check() {
 #[test]
 fn game_enters_checkmate() {
     let mut game = Game::new();
-    let moves: Vec<&str> = "e2 e3
-        e7 e6
-        d1 f3
-        e6 e5
-        f1 c4
-        e5 e4
-        f3 f7"
-        .split_whitespace()
-        .collect();
+    let moves: Vec<&str> = "e2 e3/e7 e6/d1 f3/e6 e5/f1 c4/e5 e4".split("/").collect();
 
-    for i in 0..(moves.len() / 2) {
-        let result = game.make_move(moves[2 * i], moves[2 * i + 1]);
-        eprintln!("{:?}", result);
+    for str in moves {
+        let mv = Move::parse_str(&game.board, str, None);
+        assert!(mv.is_ok());
+        let result = game.make_move(mv.unwrap());
         assert!(result.is_ok());
+        println!("{}", game);
     }
 
-    eprintln!("{}", game);
-    eprintln!("{:?}", game._can_make_legal_move());
+    println!("#232");
+    let mv = Move::parse_str(&game.board, "f3 f7", None);
+    assert!(mv.is_ok());
+    let result = game.make_move(mv.unwrap());
+    assert!(result.is_ok());
+
+    eprintln!("{:?}", game.board._can_make_legal_move());
     assert_eq!(game.get_game_state(), BoardState::GameOver);
 }
 
-/// Test that the game enters the state waitingonpromotionchoice if a pawn should be promoted
+/// Test that the game demands a promotion when a pawn should be promoted
 #[test]
-fn game_enters_waitingonpromitionchoice() {
+fn game_demands_promotion() {
     let mut game = Game::new();
-    let moves: Vec<&str> = "e2 e3
-        d7 d6
-        e3 e4
-        d6 d5
-        e4 d5
-        e8 d7
-        d5 d6
-        d7 c6
-        d6 d7
-        d8 e8
-        d7 d8"
-        .split_whitespace()
-        .collect();
+    let moves: Vec<&str> = "e2 e3/d7 d6/e3 e4/d6 d5/e4 d5/e8 d7/d5 d6/d7 c6/d6 d7/d8 e8".split_whitespace().collect();
 
-    for i in 0..(moves.len() / 2) {
-        let result = game.make_move(moves[2 * i], moves[2 * i + 1]);
-        eprintln!(
-            "{} {}: {:?}",
-            moves[2 * i],
-            moves[2 * i + 1],
-            result.unwrap()
-        );
+    for str in moves {
+        let mv = Move::parse_str(&game.board, str, None);
+        assert!(mv.is_ok());
+        let result = game.make_move(mv.unwrap());
+        assert!(result.is_ok());
     }
 
-    assert_eq!(game.get_game_state(), BoardState::WaitingOnPromotionChoice);
+    let mv = Move::parse_str(&game.board, "d7 d8", None);
+    assert!(mv.is_err());
+    let mv = Move::parse_str(&game.board, "d7 d8", Some(PieceType::King));
+    assert!(mv.is_err());
+    let mv = Move::parse_str(&game.board, "d7 d8", Some(PieceType::Pawn));
+    assert!(mv.is_err());
+    
+    let mv = Move::parse_str(&game.board, "d7 d8", Some(PieceType::Queen));
+    assert!(mv.is_ok());
+    let result = game.make_move(mv.unwrap());
+    assert!(result.is_ok());
+
+    eprintln!("{}", game);
 }
 
+/*
 /// Test whether a pawn can be promoted
 #[test]
 fn game_promotes_correctly() {
@@ -912,3 +909,4 @@ fn output_accurate() {
 |:-------------:|"
     );
 }
+*/

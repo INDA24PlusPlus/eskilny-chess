@@ -1,8 +1,7 @@
 use chess_lib::Game;
-use chess_lib::BoardState;
-use chess_lib::Position;
+use chess_lib::Move;
 use chess_lib::PieceType;
-
+use chess_lib::Position;
 /*
 
 This file shows a basic way to interact with the chess library.
@@ -11,6 +10,12 @@ This file shows a basic way to interact with the chess library.
 
 fn main() {
     let mut game = Game::new();
+    let mv = Move::_new_unvalidated(
+        &game.board,
+        Position::new(0,1).unwrap(),
+        Position::new(2,0).unwrap(),
+        None).unwrap();
+    println!("{:?}", game.board._move_obstructed(mv, true, false, false));
 
     loop {
         use std::io;
@@ -27,57 +32,82 @@ fn main() {
         println!("Please input your move (on the format 'XF XF' where X is a character and F is a number).");
 
         // read next input
-        let input_tmp = lines
+        let input_str = lines
             .next() // we iterate over the first line
             .expect("No next line.").expect("Invalid iostream."); // expect errors
-        let input: Vec<&str> = input_tmp
+        let input_vec: Vec<&str> = input_str
             .trim() // remove whitespaces
             .split(" ")
             .collect();
 
         // provide state and colour reading to user
-        if input[0] == "state" {
+        if input_vec[0] == "state" {
             println!("{:?}", game.get_game_state());
-        } else if input[0] == "colour" {
+        } else if input_vec[0] == "colour" {
             println!("{:?}", game.get_active_colour());
-        } else if input[0] == "gm" {
+        } else if input_vec[0] == "gm" {
             println!(
                 "{:?}",
-                game.get_legal_moves(Position::parse_str(input[1]).unwrap())
+                game.get_legal_moves_from(Position::parse_str(input_vec[1]).unwrap())
             );
-        } else if input[0] == "piece" {
+        } else if input_vec[0] == "gam" {
             println!(
                 "{:?}",
-                game.get_board()[Position::parse_str(input[1]).unwrap().idx]
+                game.get_legal_moves()
+            )
+        } else if input_vec[0] == "piece" {
+            println!(
+                "{:?}",
+                game.get_board()[Position::parse_str(input_vec[1]).unwrap().idx]
             );
-        } else if input.len() == 2 {
-            // try to make the move
-            match game.make_move(input[0], input[1]) {
-                Err(message) => println!("Error received: \n'{}'\nPlease try again!", message),
+        } else if input_vec.len() == 2 {
+            // Try to make the move.
+            let mv = match Move::parse_str(
+                &game.board,
+                &input_str,
+                None
+            ) {
+                Ok(res) => res,
+                Err(message) => {
+                    println!("Error received: \n'{}'\nPlease try again!", message);
+                    continue
+                }
+            };
+            match game.make_move(mv) {
                 Ok(_) => println!("Succeeded in moving the piece!"),
+                Err(message) => println!("Error received: \n'{}'\nPlease try again!", message),
+            };
+        } else if input_vec.len() == 3 {
+            let mut mv_str = String::new();
+            mv_str.push_str(input_vec[0]);
+            mv_str.push(' ');
+            mv_str.push_str(input_vec[1]);
+            let promotion_choice = match PieceType::from_str(input_vec[2]) {
+                Ok(res) => res,
+                Err(message) => {
+                    println!("Error received: \n'{}'\nPlease try again!", message);
+                    continue
+                }
+            };
+
+            // Try to make the move.
+            let mv = match Move::parse_str(
+                &game.board,
+                &input_str,
+                Some(promotion_choice),
+            ) {
+                Ok(res) => res,
+                Err(message) => {
+                    println!("Error received: \n'{}'\nPlease try again!", message);
+                    continue
+                }
+            };
+            match game.make_move(mv) {
+                Ok(_) => println!("Succeeded in moving the piece!"),
+                Err(message) => println!("Error received: \n'{}'\nPlease try again!", message),
             };
         } else {
             println!("Invalid input. Please try again!");
-        }
-
-        // if the game is waiting on a pawn promotion, make the user fix this!
-        while game.get_game_state() == BoardState::WaitingOnPromotionChoice {
-            println!("What would you like to promote the pawn to?");
-
-            // read next input
-            let input_tmp = lines
-                .next() // we iterate over the first line
-                .expect("Invalid iostream.")
-                .expect("Error."); // expect errors
-            let input = input_tmp
-                .trim(); // remove whitespaces
-            match PieceType::from_str(input) {
-                Ok(piece) => match game.set_promotion(piece) {
-                    Ok(_) => println!("Successfully promoted the piece!"),
-                    Err(msg) => println!("Error received:\n{}\nPlease try again!", msg),
-                }
-                Err(msg) => println!("Error received:\n{}\nPlease try again!", msg),
-            }            
         }
     }
 }

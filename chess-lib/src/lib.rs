@@ -7,7 +7,7 @@
 
 // TODO remove ability to place multiple kings
 
-use std::{collections::HashSet, fmt::{self}};
+use std::fmt::{self};
 
 /// The current state of the game.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -512,7 +512,25 @@ impl Move {
         return Ok(mv)
     }
 
-    fn _new_unvalidated(board: &Board, from: Position, to: Position, promotion_choice: Option<PieceType>) -> Result<Move, String> {
+    /// Initiates a new move from str formatted as `XF XF` on the board `board`.
+    /// Where X: a-h and F: 1-8.
+    /// 
+    /// The move is from the first XF to the second XF.
+    /// 
+    /// Errors if either position is incorrect or there is no piece on `from`.
+    /// Also errors if the move is not legal on the board.
+    pub fn parse_str(board: &Board, str: &str, promotion_choice: Option<PieceType>) -> Result<Move, String> {
+        let pos_str_vec: Vec<&str> = str.split_whitespace().collect();
+        if pos_str_vec.len() != 2 {
+            return Err(format!("Incorrect str passed to Move::parse_str : {}", str))
+        }
+        let from = Position::parse_str(pos_str_vec[0])?;
+        let to = Position::parse_str(pos_str_vec[1])?;
+        
+        return Move::new(board, from, to, promotion_choice);
+    }
+
+    pub fn _new_unvalidated(board: &Board, from: Position, to: Position, promotion_choice: Option<PieceType>) -> Result<Move, String> {
         from.valid()?;
         to.valid()?;
         let piece_moved = match board.array[from.idx] {
@@ -617,7 +635,7 @@ impl Move {
     /// Also errors if the move is not of the active colour.
     /// Also errors if the move is not legal on the board `board`.
     fn legal(&self, board: &Board) -> Result<(), String> {
-        self._consistent(board);
+        self._consistent(board)?;
         if !self.is_active_colour(board) {
             return Err(format!("The move {:?} is not of the active colour!", self))
         }
@@ -702,14 +720,14 @@ pub struct HistoryEntry {
 }
 
 impl HistoryEntry {
-    fn is_repetition(&self, other: &Self) -> bool {
+    fn repeates(&self, other: &Self) -> bool {
         self.fen == other.fen && self.legal_moves == other.legal_moves
     }
 }
 
 /// TODO
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct Board {
+pub struct Board {
     state: BoardState,
     game_over_reason: Option<GameOverReason>,
     array: [Option<Piece>; 8*8],
@@ -902,7 +920,7 @@ impl Board {
         let mut count = 0;
         let last_entry = self.history.last().clone().unwrap();
         for entry in self.history.clone() {
-            if *last_entry == entry {
+            if last_entry.repeates(&entry) {
                 count += 1;
                 if count == n {
                     break
@@ -1040,7 +1058,7 @@ impl Board {
         };
 
         for (rank_step, file_step) in a {
-            for i in 1..steps {
+            for i in 1..(steps+1) {
                 let mut jumps = false;
                 let mut must_capture = false;
                 let mut must_not_capture = false;
@@ -1050,29 +1068,28 @@ impl Board {
                     _ => (),
                 }
                 
-                // 
                 let to = match from.offset(rank_step*i, file_step*i) {
                     Ok(res) => res,
                     Err(_) => break,
                 };
-                match Move::_new_unvalidated(self, from, to, None) {
-                    Ok(mv) => {
-                        let break_later: bool;
-                        match self._move_obstructed(mv, jumps, must_not_capture, must_capture) {
-                            0 => break_later = false,
-                            1 => break_later = true,
-                            2 => break,
-                            _ => panic!("is not returned.")
-                        }
-                        // if the board is hypothetical, do not check if the move puts the king in check
-                        if self.hypothetical || self._try_move(mv) {
-                            legal_moves.push(mv)
-                        }
-                        if break_later {
-                            break
-                        }
-                    },
+                let mv = match Move::_new_unvalidated(self, from, to, None) {
+                    Ok(res) => res,
                     Err(_) => break,
+                };
+
+                let break_later: bool;
+                match self._move_obstructed(mv, jumps, must_not_capture, must_capture) {
+                    0 => break_later = false,
+                    1 => break_later = true,
+                    2 => break,
+                    _ => panic!("is not returned.")
+                }
+                // if the board is hypothetical, do not check if the move puts the king in check
+                if self.hypothetical || self._try_move(mv) {
+                    legal_moves.push(mv)
+                }
+                if break_later {
+                    break
                 }
             }
         }
@@ -1118,29 +1135,31 @@ impl Board {
     }
 
     /// 0 if no, 1 capture, 2 if obstructed
-    fn _move_obstructed(&self, mv: Move, jumps: bool, must_not_capture: bool, must_capture: bool) -> i32 {
-        let rank_diff = mv.to.rank.abs_diff(mv.from.rank);
-        let file_diff = mv.to.rank.abs_diff(mv.from.rank);
-        
-        let steps;
+    pub fn _move_obstructed(&self, mv: Move, jumps: bool, must_not_capture: bool, must_capture: bool) -> i32 {
+        let abs_rank_diff = mv.to.rank.abs_diff(mv.from.rank);
+        let abs_file_diff = mv.to.file.abs_diff(mv.from.file);
+        let rank_diff: i32 = (mv.to.rank as i32) - (mv.from.rank as i32);
+        let file_diff: i32 = (mv.to.file as i32) - (mv.from.file as i32);
+
+        let steps: i32;
         if jumps {
             steps = 1
-        } else if rank_diff == 0 {
-            steps = file_diff;
-        } else if file_diff == 0 {
-            steps = rank_diff;
-        } else if rank_diff == file_diff {
-            steps = rank_diff
+        } else if abs_rank_diff == 0 {
+            steps = abs_file_diff as i32;
+        } else if abs_file_diff == 0 {
+            steps = abs_rank_diff as i32;
+        } else if abs_rank_diff == abs_file_diff {
+            steps = abs_rank_diff as i32;
         } else {
             panic!("called with invalid mv.")
         }
 
-        let rank_step = (rank_diff / steps) as i32;
-        let file_step = (file_diff / steps) as i32;
+        let rank_step = rank_diff / steps;
+        let file_step = file_diff / steps;
 
-        for i in 0..(steps as i32) {
+        for i in 1..(steps+1) {
             let pos = match mv.from.offset(rank_step*i, file_step*i) {
-                Err(_) => break,
+                Err(_) => return 2,
                 Ok(res) => res,
             };
             
@@ -1149,6 +1168,8 @@ impl Board {
                     // Not obstructed
                     if !must_capture && pos == mv.to {
                         return 0
+                    } else if must_capture {
+                        return 2
                     }
                 }
                 Some(piece_captured) => {
@@ -1167,7 +1188,7 @@ impl Board {
             }
         }
 
-        panic!("should never be here.")
+        return 2
     }
 
     /// Tries `move` on board and returns whether it checks the own king or not 
@@ -1184,10 +1205,10 @@ impl Board {
         // Clone into a new game to try the movement in that game
         let mut game_clone = self.clone();
         game_clone.hypothetical = true;
-        // Does not update active_colour
+        // Updates active colour
         game_clone._perform_move(mv);
         // The move is valid if it does not put the own king in check
-        return !game_clone._is_in_check(game_clone.active_colour)
+        return !game_clone._is_in_check(game_clone.active_colour.invert())
     }
 
     fn _can_make_legal_move(&mut self) -> bool {
@@ -1338,6 +1359,11 @@ impl Board {
             }
         }
 
+        self.active_colour = self.active_colour.invert();
+
+        // At the very end, regenerate caches and append history.
+        self._generate_legal_moves_cache();
+        
         // After everything is performed, if the king is checked, disable castling
         if self._is_in_check(self.active_colour) {
             if self.active_colour.is_white() {
@@ -1348,18 +1374,15 @@ impl Board {
                 self.black_has_right_to_castle_kingside = false;
             }
         }
-
-        // At the very end, regenerate caches and append history.
+        // Performed twice to remove potential castling moves
         self._generate_legal_moves_cache();
+
         self._generate_fen_cache();
         self._append_history(Some(mv));
     }
 
     fn _update_board_state(&mut self) {
         assert!(self.state != BoardState::GameOver, "update_game_state() was called when the game had already ended.");
-
-        // It is the next colour's turn.
-        self.active_colour = self.active_colour.invert();
 
         /* If the next thing to happen is not a promotion:
         If the current game state has occurred 4 times before, enact the fivefold repetition rule (GameOver).
@@ -1413,7 +1436,7 @@ impl Board {
             } else if remaining_pieces_count == 4 && king_count == 2 && bishop_count == 2 {
                 // 2 kings + 2 bishops on the same colour
                 let mut bishop_loc = 64;
-                for idx in 0..63 {
+                for idx in 0..64 {
                     if self.array[idx].is_some_and(|p| p.is_bishop()) {
                         if bishop_loc == 64 {
                             bishop_loc = idx;
@@ -1532,7 +1555,7 @@ impl Board {
 /// * `can_enact_50_move_rule()` checks if the 50 move rule is applicable.
 #[derive(Clone, Debug)] // The clone derivation is necessary as it is used by try_move
 pub struct Game {
-    board: Board,
+    pub board: Board,
 }
 
 /// Here we implement the main functions of our game.
@@ -1564,14 +1587,14 @@ impl Game {
     /// The moves from the piece at idx i
     /// (equivalent to `Position::new_from_idx(i)`)
     /// are found at the index i in the vector.
-    fn get_legal_moves(&self) -> Vec<Vec<Move>> {
+    pub fn get_legal_moves(&self) -> Vec<Vec<Move>> {
         return self.board.legal_moves_cache.clone()
     }
 
     /// Returns all legal moves from the position `from`.
     /// 
     /// Errors only if `from` is invalid.
-    fn get_legal_moves_from(&self, from: Position) -> Result<Vec<Move>, String> {
+    pub fn get_legal_moves_from(&self, from: Position) -> Result<Vec<Move>, String> {
         from.valid()?;
 
         return Ok(self.board.legal_moves_cache[from.idx].clone())
@@ -1580,7 +1603,7 @@ impl Game {
     /// Returns all legal moves from the position `from`, that also capture a piece.
     /// 
     /// Errors only if `from` is invalid.
-    fn get_legal_capture_moves_from(&self, from: Position) -> Result<Vec<Move>, String> {
+    pub fn get_legal_capture_moves_from(&self, from: Position) -> Result<Vec<Move>, String> {
         from.valid()?;
 
         return Ok(self.board.legal_moves_cache[from.idx]
@@ -1594,7 +1617,7 @@ impl Game {
     /// Returns all legal moves from the position `from`, that also do not capture a piece.
     /// 
     /// Errors only if `from` is invalid.
-    fn get_legal_non_capture_moves_from(&self, from: Position) -> Result<Vec<Move>, String> {
+    pub fn get_legal_non_capture_moves_from(&self, from: Position) -> Result<Vec<Move>, String> {
         from.valid()?;
 
         return Ok(self.board.legal_moves_cache[from.idx]
@@ -1757,7 +1780,7 @@ impl fmt::Display for Game {
 
         // for every Option<piece> in board, print a representation.
         // Also, for every beginning of a rank i % 8 == 0 and end of a rank i & 8 == 7 add corresponding slices.
-        for rank in (0..8).rev() {
+        for rank in 0..8 {
             output.push('|');
             for file in 0..8 {
                 output.push(match self.board.array[Position::idx(rank, file)] {
