@@ -9,13 +9,11 @@ This file shows a basic way to interact with the chess library.
 */
 
 fn main() {
+    /* let mut game = match Game::new_from_fen(String::from("8/8/4K3/8/8/4k3/r7/8 b - - 0 1")){
+        Ok(res) => res,
+        Err(e) => panic!("{}", e),
+    }; */
     let mut game = Game::new();
-    let mv = Move::_new_unvalidated(
-        &game.board,
-        Position::new(0,1).unwrap(),
-        Position::new(2,0).unwrap(),
-        None).unwrap();
-    println!("{:?}", game.board._move_obstructed(mv, true, false, false));
 
     loop {
         use std::io;
@@ -51,10 +49,10 @@ fn main() {
                 game.get_legal_moves_from(Position::parse_str(input_vec[1]).unwrap())
             );
         } else if input_vec[0] == "gam" {
-            println!(
-                "{:?}",
-                game.get_legal_moves()
-            )
+            let legal_moves: Vec<Move> = game.get_legal_moves().into_iter().flatten().collect();
+            for mv in legal_moves {
+                print!("{}, ", mv.algebraic_notation(&game).unwrap());
+            }
         } else if input_vec[0] == "piece" {
             println!(
                 "{:?}",
@@ -63,7 +61,7 @@ fn main() {
         } else if input_vec.len() == 2 {
             // Try to make the move.
             let mv = match Move::parse_str(
-                &game.board,
+                &game,
                 &input_str,
                 None
             ) {
@@ -92,7 +90,7 @@ fn main() {
 
             // Try to make the move.
             let mv = match Move::parse_str(
-                &game.board,
+                &game,
                 &input_str,
                 Some(promotion_choice),
             ) {

@@ -7,17 +7,17 @@ use super::*;
 /// Test PieceType::from_char
 #[test]
 fn piece_new_from_fen() {
-    assert_eq!(Piece::new_from_fen('n'),Ok(Piece{colour: Colour::Black,piece_type: PieceType::Knight}));
-    assert_eq!(Piece::new_from_fen('Q'),Ok(Piece{colour: Colour::White,piece_type: PieceType::Queen}));
+    assert_eq!(Piece::new_from_fen('n'), Ok(Piece{colour: Colour::Black,piece_type: PieceType::Knight}));
+    assert_eq!(Piece::new_from_fen('Q'), Ok(Piece{colour: Colour::White,piece_type: PieceType::Queen}));
 }
 /// Test that game state is in progress after initialisation
 #[test]
-fn game_in_progress_after_init() {
-    let game = Game::new();
+fn game_active_after_init() {
+    let game = Game::_new();
 
     println!("{}", game);
 
-    assert_eq!(game.get_game_state(), BoardState::Active);
+    assert_eq!(game.get_game_state(), GameState::Active);
 }
 
 /// Test whether position initialization works for all cases.
@@ -53,14 +53,30 @@ fn position_inits_ok() {
     assert!(Position::parse_str("a9").is_err());
 }
 
-/// Test whether position checking with .any() works.
+/// Tests whether FEN loading works
 #[test]
-fn position_checking_works() {
-    let possible_moves = vec![Position::new(0, 0).unwrap()];
-    let other_position = Position::new(0, 0).unwrap();
-    assert!(possible_moves
-        .iter() // Creates an iterable of positions.
-        .any(|pos| pos == &other_position)); // Checks if our position is equal to the list of possible moves. We use .any() since the objects may be different instances.
+fn game_loads_fen() {
+    let game = match Game::new_from_fen(
+        String::from("8/8/4K3/8/p7/4k3/r7/8 w kQq a6 4 20")
+    ) {
+        Ok(res) => res,
+        Err(e) => panic!("{}", e)
+    };
+    assert_eq!(game.active_colour, Colour::White);
+    assert_eq!(game.en_passant_target, Some(Position::new(5,0).unwrap()));
+    assert!(game.black_has_right_to_castle_kingside);
+    assert!(game.black_has_right_to_castle_queenside);
+    assert!(game.white_has_right_to_castle_queenside);
+    assert!(!game.white_has_right_to_castle_kingside);
+    assert_eq!(game.halfmoves, 4);
+    assert_eq!(game.fullmoves, 20);
+
+    let mut array_expected: [Option<Piece>; 64] = [None; 64];
+    array_expected[Position::new(4,0).unwrap().idx] = Some(Piece { piece_type: PieceType::Pawn, colour: Colour::Black });
+    array_expected[Position::new(2,4).unwrap().idx] = Some(Piece { piece_type: PieceType::King, colour: Colour::White });
+    array_expected[Position::new(5,4).unwrap().idx] = Some(Piece { piece_type: PieceType::King, colour: Colour::Black });
+    array_expected[Position::new(6,0).unwrap().idx] = Some(Piece { piece_type: PieceType::Rook, colour: Colour::Black });
+    assert_eq!(game.array, array_expected);
 }
 
 /// Test that game state is check when the king is attacked
@@ -70,25 +86,26 @@ fn game_enters_check() {
     let moves: Vec<&str> = "e2 e3/e7 e6/d1 g4/e6 e5/g4 e6".split("/").collect();
 
     for str in moves {
-        let mv = Move::parse_str(&game.board, str, None);
+        let mv = Move::parse_str(&game, str, None);
         assert!(mv.is_ok());
         let result = game.make_move(mv.unwrap());
         assert!(result.is_ok());
+        eprintln!("{:?}", game);
     }
 
     eprintln!("{}", game);
-    assert_eq!(game.get_game_state(), BoardState::Check);
+    assert_eq!(game.get_game_state(), GameState::Check);
 }
 
 /// Test that the game state is checkmate after "skolmatt"
 /// Due to the nature of the library, this also verifies that stalemate-checking will work
 #[test]
 fn game_enters_checkmate() {
-    let mut game = Game::new();
+    let mut game = Game::_new();
     let moves: Vec<&str> = "e2 e3/e7 e6/d1 f3/e6 e5/f1 c4/e5 e4".split("/").collect();
 
     for str in moves {
-        let mv = Move::parse_str(&game.board, str, None);
+        let mv = Move::parse_str(&game, str, None);
         assert!(mv.is_ok());
         let result = game.make_move(mv.unwrap());
         assert!(result.is_ok());
@@ -96,36 +113,36 @@ fn game_enters_checkmate() {
     }
 
     println!("#232");
-    let mv = Move::parse_str(&game.board, "f3 f7", None);
+    let mv = Move::parse_str(&game, "f3 f7", None);
     assert!(mv.is_ok());
     let result = game.make_move(mv.unwrap());
     assert!(result.is_ok());
 
-    eprintln!("{:?}", game.board._can_make_legal_move());
-    assert_eq!(game.get_game_state(), BoardState::GameOver);
+    eprintln!("{:?}", game._can_make_legal_move());
+    assert_eq!(game.get_game_state(), GameState::GameOver);
 }
 
 /// Test that the game demands a promotion when a pawn should be promoted
 #[test]
 fn game_demands_promotion() {
-    let mut game = Game::new();
+    let mut game = Game::_new();
     let moves: Vec<&str> = "e2 e3/d7 d6/e3 e4/d6 d5/e4 d5/e8 d7/d5 d6/d7 c6/d6 d7/d8 e8".split_whitespace().collect();
 
     for str in moves {
-        let mv = Move::parse_str(&game.board, str, None);
+        let mv = Move::parse_str(&game, str, None);
         assert!(mv.is_ok());
         let result = game.make_move(mv.unwrap());
         assert!(result.is_ok());
     }
 
-    let mv = Move::parse_str(&game.board, "d7 d8", None);
+    let mv = Move::parse_str(&game, "d7 d8", None);
     assert!(mv.is_err());
-    let mv = Move::parse_str(&game.board, "d7 d8", Some(PieceType::King));
+    let mv = Move::parse_str(&game, "d7 d8", Some(PieceType::King));
     assert!(mv.is_err());
-    let mv = Move::parse_str(&game.board, "d7 d8", Some(PieceType::Pawn));
+    let mv = Move::parse_str(&game, "d7 d8", Some(PieceType::Pawn));
     assert!(mv.is_err());
     
-    let mv = Move::parse_str(&game.board, "d7 d8", Some(PieceType::Queen));
+    let mv = Move::parse_str(&game, "d7 d8", Some(PieceType::Queen));
     assert!(mv.is_ok());
     let result = game.make_move(mv.unwrap());
     assert!(result.is_ok());

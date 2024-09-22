@@ -11,7 +11,7 @@ use std::fmt::{self};
 
 /// The current state of the game.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum BoardState {
+pub enum GameState {
     /// The game is initialized and playable. The game starts in this state.
     /// This is the general state of the game unless the game is in check.
     Active,
@@ -157,9 +157,9 @@ impl PieceType {
             'K' => PieceType::King,
             'Q' => PieceType::Queen,
             'R' => PieceType::Rook,
+            'N' => PieceType::Knight,
             'B' => PieceType::Bishop,
-            'N' => PieceType::Rook,
-            'P' => PieceType::Bishop,
+            'P' => PieceType::Pawn,
             '♔' => PieceType::King,
             '♕' => PieceType::Queen,
             '♖' => PieceType::Rook,
@@ -245,7 +245,7 @@ impl Piece {
 
     /// Returns true if the piece is a knight
     pub fn is_knight(&self) -> bool {
-        return self.piece_type.is_pawn();
+        return self.piece_type.is_knight();
     }
 
     /// Returns true if the piece is a pawn
@@ -416,6 +416,17 @@ impl Position {
         return Position::new(rank, file);
     }
 
+    /// Returns an array of all positions on a chess board
+    pub fn array() -> [Position; 64] {
+        let mut array = [Position::new_from_idx(0).unwrap(); 64];
+        
+        for idx in 0..64 {
+            array[idx] = Position::new_from_idx(idx).unwrap();
+        }
+
+        return array
+    }
+
     /// Returns the index for some rank (0-7) and file (0-7)
     fn idx(rank: usize, file: usize) -> usize {
         return rank * 8 + file;
@@ -485,19 +496,83 @@ impl Position {
 }
 
 #[derive(Copy, Clone, Debug, Eq, Hash)]
-/// TODO
+/// Move is a struct for keeping track of the moves that may be performed.
+/// 
+/// # Fields
+/// 
+/// * the positions moved `to` and `from`,
+/// * the `piece_moved`,
+/// * the optional `piece_captured`,
+/// * the optional position `pos_captured`, which differs from `to` only in case of en passant
+/// * the optional `promotion_choice`, which needs to be specified only for a promotion
+/// 
+/// # Recommended practice
+/// 
+/// It is recommended that you interact with this struct either
+/// * by iterating over some of Game's `get_legal_moves...(...)` methods, which return vectors of moves
+/// * or by instantiating your own moves using `Move::new(...)` or `Move::parse_str(...)`,
+/// which complains if anything is wrong about the move
+/// -- it won't even let you create an instance of Move that is illegal on the board.
+/// 
+/// # Example code
+/// 
+/// ### Using game.get_legal_moves...();
+/// 
+/// ```rust
+/// use chess_lib::Game;
+/// use chess_lib::Position;
+/// use chess_lib::Piece;
+/// use chess_lib::Move;
+/// use chess_lib::GameState;
+/// 
+/// let mut game = Game::new();
+/// 
+/// // Vector of length 64,
+/// // where valid_moves[i] are all moves that can be made from Position `i`.
+/// let valid_moves: Vec<Vec<Move>> = game.get_legal_moves();
+/// 
+/// // Iterate through all positions on the board
+/// for pos in Position::array() {
+///     /* Handle moves here */
+///     let valid_moves_from_pos = &valid_moves[pos.idx];
+/// 
+///     /* You could also choose to get moves at this step and use
+///         .get_legal_moves_from(Position),
+///         .get_legal_capture_moves_from(Position)
+///         or .get_legal_non_capture_moves_from(Position)
+///     */
+/// }
+/// 
+/// /* Choose move in some way */
+/// let chosen_mv: Move = valid_moves[1][0];
+/// 
+/// assert!(!chosen_mv.is_capture());
+/// assert!(chosen_mv.piece_moved.is_knight());
+/// 
+/// // Make the move
+/// let state = match game.make_move(chosen_mv) {
+///     Ok(res) => res,
+///     Err(e) => panic!("{}", e)
+/// };
+/// 
+/// assert_eq!(state, GameState::Active);
+/// let b1: Option<Piece> = game.get(Position::new(0, 1).unwrap()).unwrap();
+/// assert_eq!(b1, None);
+/// let a3: Option<Piece> = game.get(Position::parse_str("a3").unwrap()).unwrap();
+/// assert!(a3.unwrap().is_knight());
+/// ```
 pub struct Move {
-    from: Position,
-    to: Position,
-    piece_moved: Piece,
+    pub from: Position,
+    pub to: Position,
+    pub piece_moved: Piece,
     /// None if no piece is captured by this move
-    piece_captured: Option<Piece>,
+    pub piece_captured: Option<Piece>,
     /// None if no piece is captured by this move.
     /// 
     /// Differs only from field `to` when the capture is en passant.
-    pos_captured: Option<Position>,
+    pub position_captured: Option<Position>,
     /// None unless a pawn is promoted by the move.
-    promotion_choice: Option<PieceType>,
+    pub promotion_choice: Option<PieceType>,
 }
 
 impl Move {
@@ -505,10 +580,10 @@ impl Move {
     /// 
     /// Errors if either position is incorrect or there is no piece on `from`.
     /// Also errors if the move is not legal on the board.
-    pub fn new(board: &Board, from: Position, to: Position, promotion_choice: Option<PieceType>) -> Result<Move, String> {
-        let mv = Move::_new_unvalidated(board, from, to, promotion_choice)?;
-        mv.legal(board)?;
-        mv.is_active_colour(board);
+    pub fn new(game: &Game, from: Position, to: Position, promotion_choice: Option<PieceType>) -> Result<Move, String> {
+        let mv = Move::_new_unvalidated(game, from, to, promotion_choice)?;
+        mv.legal(game)?;
+        mv.is_active_colour(game);
         return Ok(mv)
     }
 
@@ -519,7 +594,7 @@ impl Move {
     /// 
     /// Errors if either position is incorrect or there is no piece on `from`.
     /// Also errors if the move is not legal on the board.
-    pub fn parse_str(board: &Board, str: &str, promotion_choice: Option<PieceType>) -> Result<Move, String> {
+    pub fn parse_str(game: &Game, str: &str, promotion_choice: Option<PieceType>) -> Result<Move, String> {
         let pos_str_vec: Vec<&str> = str.split_whitespace().collect();
         if pos_str_vec.len() != 2 {
             return Err(format!("Incorrect str passed to Move::parse_str : {}", str))
@@ -527,13 +602,14 @@ impl Move {
         let from = Position::parse_str(pos_str_vec[0])?;
         let to = Position::parse_str(pos_str_vec[1])?;
         
-        return Move::new(board, from, to, promotion_choice);
+        return Move::new(game, from, to, promotion_choice);
     }
 
-    pub fn _new_unvalidated(board: &Board, from: Position, to: Position, promotion_choice: Option<PieceType>) -> Result<Move, String> {
+    /// Ensures consistency but not legality
+    fn _new_unvalidated(game: &Game, from: Position, to: Position, promotion_choice: Option<PieceType>) -> Result<Move, String> {
         from.valid()?;
         to.valid()?;
-        let piece_moved = match board.array[from.idx] {
+        let piece_moved = match game.array[from.idx] {
             Some(piece) => piece,
             None => return Err(format!("Position {:?} holds no piece", from))
         };
@@ -545,13 +621,13 @@ impl Move {
             .invert() // opponent's colour
             .pawn_dir(), // opponent's pawn direction
             0);
-        match board.en_passant_target {
+        match game.en_passant_target {
             Some(pos) => {
                 match maybe_en_passant_pos {
                     Ok(pos2) => {
                         if pos == pos2 {
                             en_passant_pos = Some(pos);
-                            en_passant_piece = board.array[pos.idx];
+                            en_passant_piece = game.array[pos.idx];
                         }
                     },
                     Err(_) => (),
@@ -560,7 +636,7 @@ impl Move {
             None => (),
         }
 
-        let piece_captured = match board.array[to.idx] {
+        let piece_captured = match game.array[to.idx] {
             Some(piece) => Some(piece),
             None => en_passant_piece
         };
@@ -575,24 +651,24 @@ impl Move {
             to,
             piece_moved,
             piece_captured,
-            pos_captured,
+            position_captured: pos_captured,
             promotion_choice,
         };
 
-        mv._consistent(board)?;
+        mv._consistent(game)?;
         
         return Ok(mv)
     }
 
     /// Checks field consistency.
-    fn _consistent(&self, board: &Board) -> Result<(), String> {
+    fn _consistent(&self, game: &Game) -> Result<(), String> {
         self.from.valid()?;
         self.to.valid()?;
-        match self.pos_captured {
+        match self.position_captured {
             Some(pos) => pos.valid()?,
             _ => (),
         }
-        if self.piece_captured.is_some_and(|piece| piece.colour != board.active_colour.invert()) {
+        if self.piece_captured.is_some_and(|piece| piece.colour != game.active_colour.invert()) {
                 return Err(format!("The piece you are trying to capture is not of the opponents colour."))
         }
         if self.piece_moved.is_pawn() && (
@@ -610,19 +686,19 @@ impl Move {
         } else if self.promotion_choice.is_some() {
             return Err(format!("The promotion choice is unnecessarily specified."))
         }
-        if Some(self.piece_moved) != board.array[self.from.idx] {
+        if Some(self.piece_moved) != game.array[self.from.idx] {
             return Err(format!("Position {:?} does not represent the piece moved!", self.from))
         }
-        if self.piece_captured.is_none() != self.pos_captured.is_none() {
-            return Err(format!("Capture discrepancy between piece_captured {:?} and pos_captured {:?}", self.piece_captured, self.pos_captured))
+        if self.piece_captured.is_none() != self.position_captured.is_none() {
+            return Err(format!("Capture discrepancy between piece_captured {:?} and pos_captured {:?}", self.piece_captured, self.position_captured))
         }
-        if self.pos_captured.is_some_and(|pos| board.array[pos.idx] == self.piece_captured) {
+        if self.position_captured.is_some_and(|pos| game.array[pos.idx] == self.piece_captured) {
                 return Err(format!("Position {:?} does not represent the piece captured!", self.to));
             }
-        if Some(self.to) != self.pos_captured
-            && !self.pos_captured.is_none()
-            && board.en_passant_target != self.pos_captured {
-            return Err(format!("Position between {:?} and {:?}: en passant does not allow this move.", self.to, self.pos_captured))
+        if Some(self.to) != self.position_captured
+            && !self.position_captured.is_none()
+            && game.en_passant_target != self.position_captured {
+            return Err(format!("Position between {:?} and {:?}: en passant does not allow this move.", self.to, self.position_captured))
         }
 
         Ok(())
@@ -634,22 +710,22 @@ impl Move {
     /// Also errors if a promotion isn't specified when necessary, or is specified unnecessarily.
     /// Also errors if the move is not of the active colour.
     /// Also errors if the move is not legal on the board `board`.
-    fn legal(&self, board: &Board) -> Result<(), String> {
-        self._consistent(board)?;
-        if !self.is_active_colour(board) {
-            return Err(format!("The move {:?} is not of the active colour!", self))
+    pub fn legal(&self, game: &Game) -> Result<(), String> {
+        self._consistent(game)?;
+        if !self.is_active_colour(game) {
+            return Err(format!("The move {} is not of the active colour!", self.algebraic_notation(game).unwrap()))
         }
         for i in 0..64 {
-            if board.legal_moves_cache[i].contains(&self) {
+            if game.legal_moves_cache[i].contains(&self) {
                 return Ok(())
             }
         }
-        return Err(format!("The move {:?} is not legal on the current board.", self))
+        return Err(format!("The move {} is not legal on the current board.", self.algebraic_notation(game).unwrap()))
     }
 
     /// Returns true if self moves a piece of the active colour
-    fn is_active_colour(&self, board: &Board) -> bool {
-        self.piece_moved.colour == board.active_colour
+    fn is_active_colour(&self, game: &Game) -> bool {
+        self.piece_moved.colour == game.active_colour
     }
 
     /// Returns true if the move seems like a capturing move.
@@ -682,21 +758,95 @@ impl Move {
     /// when played if you do not ensure this Move is valid.
     /// Moves returned from Board::get_legal_moves() are always valid.
     pub fn is_en_passant(&self) -> bool {
-        Some(self.to) != self.pos_captured
+        self.position_captured.is_some() && Some(self.to) != self.position_captured
+    }
+
+    /// Returns true if the move is a castling move
+    /// 
+    /// Might incorrectly label invalid moves.
+    /// 
+    /// Does not validate self. As such, this method might error
+    /// when played if you do not ensure this Move is valid.
+    /// Moves returned from Board::get_legal_moves() are always valid.
+    pub fn is_castling(&self) -> bool {
+        if self.piece_moved.is_king() {
+            let file_diff = self.from.file.abs_diff(self.to.file);
+            return file_diff == 2 || file_diff == 3
+        }
+        return false
     }
 
     /// Sets the promotion of this move. Useful if you do not want to keep track of all possible promotion moves.
     /// 
     /// Errors if called on an invalid move or non-promotion move.
-    pub fn set_promotion_choice(&mut self, piece_type: PieceType, board: &mut Board) -> Result<(), String> {
+    pub fn set_promotion_choice(&mut self, piece_type: PieceType, game: &Game) -> Result<(), String> {
         match self.promotion_choice {
             None => return Err(format!("Called on a move where no promotion should occur.")),
             Some(_) => self.promotion_choice = Some(piece_type),
         }
 
-        self.legal(board)?;
+        self.legal(game)?;
 
         Ok(())
+    }
+
+    /// Returns the algebraic notation for the move.
+    /// 
+    /// Does not specify whether the move causes check or checkmate.
+    /// 
+    /// Errors only if called on an inconsistent move in the game `game`.
+    pub fn algebraic_notation(&self, game: &Game) -> Result<String,String> {
+        self._consistent(game)?;
+
+        let mut res = String::new();
+        if self.is_castling() {
+            let file_diff = self.from.file.abs_diff(self.to.file);
+
+            return match file_diff {
+                2 => Ok(format!("O-O")),
+                3 => Ok(format!("O-O-O")),
+                _ => return Err(format!("Called on an invalid move that looked like castling."))
+            }
+        }
+
+        if !self.piece_moved.is_pawn() {
+            res.push(self.piece_moved.piece_type.char());
+        }
+
+        let flattened_legal_moves: Vec<Move> = game.get_legal_moves().into_iter().flatten().collect();
+        let mut include_from_rank = false;
+        let mut include_from_file = false;
+        for mv in flattened_legal_moves {
+            if mv.eq(self) {
+                continue
+            } else if mv.piece_moved == self.piece_moved {
+                if mv.from.rank == self.to.rank {
+                    include_from_rank = true;
+                } else if mv.from.file == self.to.file {
+                    include_from_file = true;
+                }
+            }
+        }
+        let from_str = self.from.to_string();
+        if include_from_rank {
+            res.push(from_str.chars().nth(0).unwrap())
+        }
+        if include_from_file {
+            res.push(from_str.chars().nth(1).unwrap())
+        }
+        if self.is_capture() {
+            res.push('x')
+        }
+        res.push_str(&self.to.to_string());
+        if self.is_promotion() {
+            res.push('=');
+            res.push(self.promotion_choice.unwrap().char());
+        }
+        if self.is_en_passant() {
+            res.push_str(" e.p.");
+        }
+
+        return Ok(res)
     }
 }
 
@@ -725,10 +875,78 @@ impl HistoryEntry {
     }
 }
 
-/// TODO
+// TODO
+/// A library for running a game of chess. 
+///
+/// % NOTE! Viewing in rustdoc, full descriptions for methods can be viewed under <a href="#implementations">Implementations</a> below. There you can also find links to the source code!
+///
+/// Supports move generation/validation, board modifications, and check/checkmate/stalemate detection.
+/// 
+/// # Usage
+/// 
+/// Example code below. See methods in Game and Position for more details. 
+/// 
+/// ```rust
+/// use chess_engine::*;
+/// 
+/// let mut game = Game::new();
+/// assert_eq!(game.get_active_colour(), Colour::White);
+/// 
+/// // Making moves
+/// let result = game.make_move("e2", "e4"); // moves from e2 to e4
+/// assert!(result.is_ok());
+/// 
+/// let to_pos = Position::parse_str("e7").unwrap();
+/// let from_pos = Position::parse_str("e5").unwrap();
+/// let result = game.make_move_pos(to_pos, from_pos); // moves from e7 to e5
+/// assert!(result.is_ok());
+/// 
+/// match game.get_game_state() {
+///     GameState::InProgress => {
+///         // The game is running (the king is not in check).
+///     },
+///     GameState::Check => {
+///         // The king is in check.
+///     },
+///     GameState::WaitingOnPromotionChoice => {
+///         // We need to promote the pawn!
+///         let result = game.set_promotion(PieceType::Queen);
+///         assert!(result.is_ok());
+///     },
+///     GameState::GameOver => {
+///         // Game over!
+///         match game.get_game_over_reason() {
+///             Some(reason) => {
+///                 eprintln!("The game is over because of {:?}",reason);
+///             },
+///             None => {
+///                 // The game over reason is always set when the game is over
+///                 assert!(false)
+///             },
+///         }
+///     },
+/// }
+/// 
+/// assert_eq!(game.get_game_state(), GameState::InProgress);
+/// # use std::io;
+/// # Ok::<(), io::Error>(())
+/// ```
+/// 
+/// The following methods may be of use if you want to work with the board in any way.
+/// * `get_board()` returns the board as an array of `Option<Piece>`-s.
+/// * `get_possible_moves(Position)` returns a list of all possible moves for the piece at position.
+/// * `get_possible_capture_moves(Position)` returns the possible moves which capture.
+/// * `get_possible_non_capture_moves(Position)` returns the possible moves which do not capture.
+///
+/// If you want to implement manual draws, the following methods might be helpful:
+///
+/// * `submit_draw()` lets you set the game as manually drawn.
+/// * `can_enact_threefold_repetition_rule()` checks if the threefold repetition rule is applicable.
+/// * `can_enact_50_move_rule()` checks if the 50 move rule is applicable.
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Board {
-    state: BoardState,
+pub struct Game {
+    state: GameState,
     game_over_reason: Option<GameOverReason>,
     array: [Option<Piece>; 8*8],
     active_colour: Colour,
@@ -746,11 +964,12 @@ pub struct Board {
     fen_cache: String,
     history: Vec<HistoryEntry>,
     /// Is true iff the current struct is hypothetical (used in move lookahead)
-    hypothetical: bool,
+    recursion_depth: u8,
 }
 
-impl Board {
-    fn new() -> Board {
+/// Private function implementations
+impl Game {
+    fn _new() -> Game {
         let mut array: [Option<Piece>; 64] = [None; 64];
 
         for colour in [Colour::White, Colour::Black] {
@@ -785,8 +1004,8 @@ impl Board {
                 }
         }
 
-        let mut board = Board {
-            state: BoardState::Active,
+        let mut board = Game {
+            state: GameState::Active,
             game_over_reason: None,
             array,
             active_colour: Colour::White,
@@ -800,7 +1019,7 @@ impl Board {
             legal_moves_cache: vec![],
             fen_cache: String::new(),
             history: vec![],
-            hypothetical: false,
+            recursion_depth: 0,
         };
 
         board._generate_legal_moves_cache();
@@ -811,7 +1030,7 @@ impl Board {
     }
 
     /// TODO validate edge cases
-    fn new_from_fen(fen: String) -> Result<Board,String> {
+    fn _new_from_fen(fen: String) -> Result<Game,String> {
         let mut array: [Option<Piece>; 64] = [None; 64];
 
         let fen_vec = fen.split_whitespace().collect::<Vec<&str>>();
@@ -820,33 +1039,31 @@ impl Board {
         let mut rank: usize = 0;
         let mut file: usize = 0;
         for c in fen_vec[0].chars() {
-            match c {
-                '1'..'8' => {
-                    file += c.to_string().parse::<usize>().unwrap();
-                    if file > 7 {
-                        return Err(format!("Invalid FEN-string: the first field {} is invalid", fen_vec[0]));
-                    }
-                }
-                '/' => {
-                    if file != 7 {
-                        return Err(format!("Invalid FEN-string: the first field {} is invalid", fen_vec[0]));
-                    }
-                    rank += 1;
-                    file = 0;
-                    continue
-                }
-                _ => {
-                    let piece = match Piece::new_from_fen(c) {
-                        Ok(piece) => piece,
-                        Err(_) => return Err(format!("Invalid FEN-string: the first field {} is invalid", fen_vec[0]))
-                    };
-
-                    array[rank*8 + file] = Some(piece);
-
+            if c >= '1' && c <= '8' {
+                file += c.to_string().parse::<usize>().unwrap();
+                if file > 8 {
+                    return Err(format!("Invalid FEN-string: the first field {} is invalid", fen_vec[0]));
                 }
             }
+            else if c == '/' {
+                if file != 8 {
+                    return Err(format!("Invalid FEN-string: the first field {} is invalid", fen_vec[0]));
+                }
+                rank += 1;
+                file = 0;
+                continue
+            } else {
+                let piece = match Piece::new_from_fen(c) {
+                    Ok(piece) => piece,
+                    Err(_) => return Err(format!("Invalid FEN-string: the first field {} is invalid", fen_vec[0]))
+                };
+
+                array[rank*8 + file] = Some(piece);
+
+                file += 1;
+            }
         }
-        if !(file == 7 && rank == 7) {
+        if !(file == 8 && rank == 7) {
             return Err(format!("Invalid FEN-string: the first field {} is invalid", fen_vec[0]))
         }
 
@@ -886,13 +1103,13 @@ impl Board {
         };
 
         // Field 6: fullmoves
-        let fullmoves = match fen_vec[4].parse::<u32>() {
+        let fullmoves = match fen_vec[5].parse::<u32>() {
             Ok(u) => u,
             Err(_) => return Err(format!("Invalid FEN-string: fullmoves string {} is invalid", fen_vec[4]))
         };
 
-        let mut board = Board {
-            state: BoardState::Active,
+        let mut board = Game {
+            state: GameState::Active,
             game_over_reason: None,
             array,
             active_colour,
@@ -906,7 +1123,7 @@ impl Board {
             legal_moves_cache: vec![],
             fen_cache: String::new(),
             history: vec![],
-            hypothetical: false,
+            recursion_depth: 0,
         };
 
         board._generate_legal_moves_cache();
@@ -916,7 +1133,8 @@ impl Board {
         return Ok(board);
     }
 
-    fn is_nfold_repetition(&mut self, n: u8) -> bool {
+
+    fn _is_nfold_repetition(&mut self, n: u8) -> bool {
         let mut count = 0;
         let last_entry = self.history.last().clone().unwrap();
         for entry in self.history.clone() {
@@ -930,7 +1148,13 @@ impl Board {
         return count == n;
     }
 
-    /// Generates self.fen_cache. Is called after every move.
+    /// Is called after every move and upon initialization.
+    fn _generate_caches(&mut self, last_move: Option<Move>) {
+        self._generate_fen_cache();
+        self._generate_legal_moves_cache();
+        self._append_history(last_move);
+    }
+
     fn _generate_fen_cache(&mut self) {
         let mut fen = String::new();
 
@@ -1007,19 +1231,16 @@ impl Board {
         self.fen_cache = fen.clone();
     }
     
-    /// Generates self.legal_moves_cache. Is called after every move.
     fn _generate_legal_moves_cache(&mut self) {
         let mut legal_moves_cache: Vec<Vec<Move>> = vec![];
-        for idx in 0..64 {
-            let from = Position::new_from_idx(idx).unwrap();
-            legal_moves_cache.push(self._generate_legal_moves_from_pos(from).unwrap());
+        for from in Position::array() {
+            legal_moves_cache.push(self._generate_legal_moves_from_pos(from));
         }
 
         self.legal_moves_cache = legal_moves_cache
     }
 
-    /// Appends history. Is called after every move.
-    /// Presumes updated self.fen_cache and self.legal_moves_cache.
+    /// Presumes updated fen_cache and legal_moves_cache
     fn _append_history(&mut self, last_move: Option<Move>) {
         // Save game state in history vector
         let fen = self.fen_cache.clone();
@@ -1031,65 +1252,82 @@ impl Board {
         });
     }
 
-    /// If a piece is standing on the given tile, this method returns all possible new positions of that piece.
+
+    /// This method returns all possible moves of the piece at `from`,
+    /// or an empty vector if there is no piece there.
     /// 
-    /// Errors only if pos is invalid.
-    fn _generate_legal_moves_from_pos(&self, from: Position) -> Result<Vec<Move>,String> {
-        from.valid()?;
+    /// # Panics
+    /// 
+    /// Panics if `from` is invalid.
+    fn _generate_legal_moves_from_pos(&self, from: Position) -> Vec<Move> {
+        assert!(from.valid().is_ok(), "called with invalid from");
 
         // Get piece. If it is None, it cannot move so return an empty vector.
         let piece: Piece = match self.array[from.idx] {
-            None => return Ok(vec![]),
+            None => return vec![],
             Some(piece) => piece,
         };
 
         let mut legal_moves: Vec<Move> = Vec::with_capacity(60);
         
-        let (a, steps) = match piece.piece_type {
+        let (a, mut steps) = match piece.piece_type {
             PieceType::King => ([(1, 1), (1, 0), (1, -1), (0, 1), (0, -1), (-1, 1), (-1, 0), (-1, -1)].as_slice(), 1),
             PieceType::Queen => ([(1, 1), (1, 0), (1, -1), (0, 1), (0, -1), (-1, 1), (-1, 0), (-1, -1)].as_slice(), 8),
             PieceType::Bishop => ([(1, 1), (1, -1), (-1, 1), (-1, -1)].as_slice(), 8),
             PieceType::Knight => ([(1,2), (1,-2), (-1,2), (-1,-2),(2,1), (-2,1), (2,-1), (-2,-1)].as_slice(), 1),
             PieceType::Rook => ([(1, 0), (0, 1), (0, -1), (-1, 0)].as_slice(), 8),
             PieceType::Pawn => match self.active_colour {
-                    Colour::White => ([(1,0),(2,0),(1,1),(1,-1)].as_slice(), 1),
-                    Colour::Black => ([(-1,0),(-2,0),(-1,1),(-1,-1)].as_slice(), 1)
+                    Colour::White => ([(1,0),(1,1),(1,-1)].as_slice(), 1),
+                    Colour::Black => ([(-1,0),(-1,1),(-1,-1)].as_slice(), 1),
             },
         };
 
         for (rank_step, file_step) in a {
-            for i in 1..(steps+1) {
-                let mut jumps = false;
-                let mut must_capture = false;
-                let mut must_not_capture = false;
-                match piece.piece_type {
-                    PieceType::Pawn => if *file_step == 0 { must_not_capture = true } else {  must_capture = true },
-                    PieceType::Knight => jumps = true,
-                    _ => (),
+            let mut must_capture = false;
+            let mut must_not_capture = false;
+            if piece.is_pawn() {
+                if *file_step == 0 {
+                    // Pawns must not capture forward and may walk 2 steps forward if on the first rank.
+                    must_not_capture = true;
+                    if (from.rank == 6 && piece.colour == Colour::Black)
+                        || (from.rank == 1 && piece.colour == Colour::White) {
+                            steps = 2
+                        }
+                } else {
+                    // Pawns must capture diagonally
+                    must_capture = true
                 }
-                
+            }
+            for i in 1..(steps+1) {
                 let to = match from.offset(rank_step*i, file_step*i) {
                     Ok(res) => res,
                     Err(_) => break,
                 };
                 let mv = match Move::_new_unvalidated(self, from, to, None) {
                     Ok(res) => res,
-                    Err(_) => break,
+                    Err(_) => match Move::_new_unvalidated(self, from, to, Some(PieceType::Queen)) {
+                        Ok(res) => res,
+                        Err(_) => break,
+                    }
                 };
-
-                let break_later: bool;
-                match self._move_obstructed(mv, jumps, must_not_capture, must_capture) {
-                    0 => break_later = false,
-                    1 => break_later = true,
-                    2 => break,
-                    _ => panic!("is not returned.")
-                }
-                // if the board is hypothetical, do not check if the move puts the king in check
-                if self.hypothetical || self._try_move(mv) {
-                    legal_moves.push(mv)
-                }
-                if break_later {
-                    break
+                match self.array[mv.to.idx] {
+                    None => {
+                        if !must_capture
+                            && !self._move_checks_king(mv)
+                        {
+                            legal_moves.push(mv)
+                        }
+                        continue
+                    },
+                    Some(captured_piece) => {
+                        if !must_not_capture
+                            && piece.colour != captured_piece.colour
+                            && !self._move_checks_king(mv)
+                        {
+                            legal_moves.push(mv)
+                        }
+                        break
+                    }
                 }
             }
         }
@@ -1105,7 +1343,7 @@ impl Board {
                 if piece.colour == colour && boolean {
                     // Check if castling squares are free.
                     for idx in a {
-                        // Obstruction already tested
+                        // Testing obstruction
                         if !self.array[*idx].is_none() {
                             break;
                         }
@@ -1114,139 +1352,111 @@ impl Board {
                             self,
                             from,
                             Position::new_from_idx(*idx).unwrap(),
-                            None) {
-                                Ok(res) => res,
-                                Err(_) => break,
-                            };
-                        // if the board is hypothetical, do not check if the move puts the king in check
-                        if self.hypothetical || !self._try_move(test_mv) {
+                            None
+                        ) {
+                            Ok(res) => res,
+                            Err(_) => break, // promotion edge case not necessary
+                        };
+                        if self._move_checks_king(test_mv) {
+                            break
+                        } else {
                             // if final move is ok, push as legal move
                             if a.ends_with(&[*idx]) { legal_moves.push(test_mv) }
                             continue
-                        } else {
-                            break
                         }
                     }
                 }
             }
         }
                     
-        return Ok(legal_moves);
+        return legal_moves
     }
 
-    /// 0 if no, 1 capture, 2 if obstructed
-    pub fn _move_obstructed(&self, mv: Move, jumps: bool, must_not_capture: bool, must_capture: bool) -> i32 {
-        let abs_rank_diff = mv.to.rank.abs_diff(mv.from.rank);
-        let abs_file_diff = mv.to.file.abs_diff(mv.from.file);
-        let rank_diff: i32 = (mv.to.rank as i32) - (mv.from.rank as i32);
-        let file_diff: i32 = (mv.to.file as i32) - (mv.from.file as i32);
-
-        let steps: i32;
-        if jumps {
-            steps = 1
-        } else if abs_rank_diff == 0 {
-            steps = abs_file_diff as i32;
-        } else if abs_file_diff == 0 {
-            steps = abs_rank_diff as i32;
-        } else if abs_rank_diff == abs_file_diff {
-            steps = abs_rank_diff as i32;
-        } else {
-            panic!("called with invalid mv.")
-        }
-
-        let rank_step = rank_diff / steps;
-        let file_step = file_diff / steps;
-
-        for i in 1..(steps+1) {
-            let pos = match mv.from.offset(rank_step*i, file_step*i) {
-                Err(_) => return 2,
-                Ok(res) => res,
-            };
-            
-            match self.array[pos.idx] {
-                None => {
-                    // Not obstructed
-                    if !must_capture && pos == mv.to {
-                        return 0
-                    } else if must_capture {
-                        return 2
-                    }
-                }
-                Some(piece_captured) => {
-                    // Obstructed by own colour
-                    if piece_captured.colour == mv.piece_moved.colour {
-                        return 2
-                    } else {
-                        // Capture move
-                        if !must_not_capture && pos == mv.to {
-                            return 1
-                        }
-                        // Obstructed early by opponents colour
-                        return 2
-                    }
-                }
-            }
-        }
-
-        return 2
-    }
-
-    /// Tries `move` on board and returns whether it checks the own king or not 
+    /// Tries `move` on board and returns whether it checks the own king or not.
     /// 
     /// # Panics
     ///
     /// Panics if `mv` is not consistent.
-    fn _try_move(
-        &self,
-        mv: Move,
-    ) -> bool {
-        assert!(mv._consistent(self).is_ok(),"try_move was called from invalid from_pos.");
+    fn _move_checks_king(&self, mv: Move) -> bool {
+        assert!(mv._consistent(self).is_ok(), "_move_checks_king was called with inconsistent move.");
 
         // Clone into a new game to try the movement in that game
         let mut game_clone = self.clone();
-        game_clone.hypothetical = true;
-        // Updates active colour
         game_clone._perform_move(mv);
-        // The move is valid if it does not put the own king in check
-        return !game_clone._is_in_check(game_clone.active_colour.invert())
+        return game_clone._is_in_check_no_cache(mv.piece_moved.colour)
     }
 
-    fn _can_make_legal_move(&mut self) -> bool {
-        for i in 0..64 {
-            if self.legal_moves_cache[i].len() > 0 {
-                return true
+    fn _is_in_check_no_cache(&self, colour: Colour) -> bool {
+        // Castling and forward walking pawns are not checked
+        // (Those moves cannot capture.)
+        for from in Position::array() {
+            let piece = match self.array[from.idx] {
+                Some(res) => res,
+                None => continue,
+            };
+            if piece.colour == colour {
+                continue
+            }
+            let (a, steps) = match piece.piece_type {
+                PieceType::King => ([(1, 1), (1, 0), (1, -1), (0, 1), (0, -1), (-1, 1), (-1, 0), (-1, -1)].as_slice(), 1),
+                PieceType::Queen => ([(1, 1), (1, 0), (1, -1), (0, 1), (0, -1), (-1, 1), (-1, 0), (-1, -1)].as_slice(), 8),
+                PieceType::Bishop => ([(1, 1), (1, -1), (-1, 1), (-1, -1)].as_slice(), 8),
+                PieceType::Knight => ([(1,2), (1,-2), (-1,2), (-1,-2),(2,1), (-2,1), (2,-1), (-2,-1)].as_slice(), 1),
+                PieceType::Rook => ([(1, 0), (0, 1), (0, -1), (-1, 0)].as_slice(), 8),
+                PieceType::Pawn => match self.active_colour {
+                        Colour::White => ([(1,1),(1,-1)].as_slice(), 1),
+                        Colour::Black => ([(-1,1),(-1,-1)].as_slice(), 1)
+                },
+            };
+    
+            for (rank_step, file_step) in a {
+                for i in 1..(steps+1) {                    
+                    let to = match from.offset(rank_step*i, file_step*i) {
+                        Ok(res) => res,
+                        Err(_) => break,
+                    };
+                    if self.array[to.idx].is_some_and(
+                        |p| p.is_king() && p.colour == colour
+                    ) {
+                        return true
+                    }
+                }
             }
         }
+
         return false
     }
 
-    /// Validates move and performs the move if valid. Errors if the board state is GameOver or if the move is invalid.
-    fn make_move(&mut self, mv: Move) -> Result<(), String> {
-        // Checks that the board state is InProgress or Check, else throws an error.
-        if !(self.state == BoardState::Active || self.state == BoardState::Check) {
-            let error = format!("The game is not in a state where a move can be made. Currently, the state is {:?}.", self.state);
-            return Err(error);
+    fn _is_in_check(&self, colour: Colour) -> bool {
+        // Iterate over pieces of the opposite colour and see if any attack the king.
+        for (i, piece) in self.array.clone().iter().enumerate() {
+            if piece.is_some_and(|p| p.colour != colour) {
+                if self.legal_moves_cache[i].iter().any(
+                    |mv| mv.piece_captured.is_some_and(|p| p.is_king())
+                ) {
+                    return true;
+                }
+            }
         }
-        // Validate move
-        mv.legal(self)?;
 
-        // Perform move
-        self._perform_move(mv);
-        
-        // Update board state
-        self._update_board_state();
-
-        Ok(())
+        // If we have found no cases where the king is in check, the king is not in check.
+        return false;
     }
 
-    /// Performs a validated move; also generates new legal_moves_cache, fen_cache and appends history.
+    /// Performs a consistent move
     /// 
     /// Also updates the fields `en_passant_target`, `halfmoves`, `fullmoves`, `white_has_right_to_castle_kingside` etc.
     /// Removes an en passant-ed pawn, and moves the rook in the event of a castle.
+    /// 
+    /// # Panics
+    /// 
+    /// Panics if move is inconsistent
     fn _perform_move(&mut self, mv: Move) {
+        assert!(mv._consistent(self).is_ok(), "_perform_move called on inconsistent move.");
+        
         // We move the piece!
-        let captured_piece = mv.piece_captured; // is None if none were captured
         let moved_piece = mv.piece_moved;
+        let captured_piece = mv.piece_captured; // is None if none were captured
 
         self.array[mv.from.idx] = None;
         match mv.promotion_choice {
@@ -1254,8 +1464,8 @@ impl Board {
                 // En passant!
                 let mut promoted_piece = moved_piece.clone();
                 promoted_piece.piece_type = promotion_choice;
-                self.array[mv.pos_captured.unwrap().idx] = None;
-                self.array[mv.to.idx] = Some(promoted_piece); 
+                self.array[mv.position_captured.unwrap().idx] = None;
+                self.array[mv.to.idx] = Some(promoted_piece);
             },
             None => self.array[mv.to.idx] = Some(moved_piece),
         }
@@ -1277,31 +1487,23 @@ impl Board {
                 // If the king moves, we need to disable future castling for the colour that moved.
                 match mv.to.idx {
                     // Move rook if castling: 2 = c1, 6 = g1, 58 = c8, 62 = g8
-                    2 => {
-                        if self.white_has_right_to_castle_queenside {
-                            self.array[3] = self.array[0];
-                            self.array[0] = None;
-                        }
-                    }
-                    6 => {
-                        if self.white_has_right_to_castle_kingside {
-                            self.array[5] = self.array[7];
-                            self.array[7] = None;
-                        }
-                    }
-                    58 => {
-                        if self.black_has_right_to_castle_queenside {
-                            self.array[59] = self.array[56];
-                            self.array[56] = None;
-                        }
-                    }
-                    62 => {
-                        if self.black_has_right_to_castle_queenside {
-                            self.array[61] = self.array[63];
-                            self.array[63] = None;
-                        }
-                    }
-                    _ => {}
+                    2 => if self.white_has_right_to_castle_queenside {
+                        self.array[3] = self.array[0];
+                        self.array[0] = None;
+                    },
+                    6 => if self.white_has_right_to_castle_kingside {
+                        self.array[5] = self.array[7];
+                        self.array[7] = None;
+                    },
+                    58 => if self.black_has_right_to_castle_queenside {
+                        self.array[59] = self.array[56];
+                        self.array[56] = None;
+                    },
+                    62 => if self.black_has_right_to_castle_queenside {
+                        self.array[61] = self.array[63];
+                        self.array[63] = None;
+                    },
+                    _ => (),
                 }
 
                 // Disable castling if the king moves.
@@ -1320,19 +1522,11 @@ impl Board {
                 // If the rook moves, we need to disable castling for the correct colour and rook.
                 match mv.from.idx {
                     // indices 0 = a1, 7 = h1, 56 = a8 and 63 = h8
-                    0 => {
-                        self.white_has_right_to_castle_queenside = false;
-                    }
-                    7 => {
-                        self.white_has_right_to_castle_kingside = false;
-                    }
-                    56 => {
-                        self.black_has_right_to_castle_queenside = false;
-                    }
-                    63 => {
-                        self.black_has_right_to_castle_kingside = false;
-                    }
-                    _ => {}
+                    0 => self.white_has_right_to_castle_queenside = false,
+                    7 => self.white_has_right_to_castle_kingside = false,
+                    56 => self.black_has_right_to_castle_queenside = false,
+                    63 => self.black_has_right_to_castle_kingside = false,
+                    _ => (),
                 }
             }
             _default => {
@@ -1341,31 +1535,18 @@ impl Board {
                 if captured_piece.is_some_and(|p| p.is_rook()) {
                     match mv.to.idx {
                         // indices 0 = a1, 7 = h1, 56 = a8 and 63 = h8
-                        0 => {
-                            self.white_has_right_to_castle_queenside = false;
-                        }
-                        7 => {
-                            self.white_has_right_to_castle_kingside = false;
-                        }
-                        56 => {
-                            self.black_has_right_to_castle_queenside = false;
-                        }
-                        63 => {
-                            self.black_has_right_to_castle_kingside = false;
-                        }
-                        _ => {}
+                        0 => self.white_has_right_to_castle_queenside = false,
+                        7 => self.white_has_right_to_castle_kingside = false,
+                        56 => self.black_has_right_to_castle_queenside = false,
+                        63 => self.black_has_right_to_castle_kingside = false,
+                        _ => (),
                     }
                 }
             }
         }
 
-        self.active_colour = self.active_colour.invert();
-
-        // At the very end, regenerate caches and append history.
-        self._generate_legal_moves_cache();
-        
-        // After everything is performed, if the king is checked, disable castling
-        if self._is_in_check(self.active_colour) {
+        // Check if opponent's king is checked, and update fields in that case
+        if self._is_in_check_no_cache(self.active_colour.invert()) {
             if self.active_colour.is_white() {
                 self.white_has_right_to_castle_queenside = false;
                 self.white_has_right_to_castle_kingside = false;
@@ -1374,15 +1555,12 @@ impl Board {
                 self.black_has_right_to_castle_kingside = false;
             }
         }
-        // Performed twice to remove potential castling moves
-        self._generate_legal_moves_cache();
-
-        self._generate_fen_cache();
-        self._append_history(Some(mv));
     }
 
-    fn _update_board_state(&mut self) {
-        assert!(self.state != BoardState::GameOver, "update_game_state() was called when the game had already ended.");
+    fn _update_game_state(&mut self) {
+        assert!(self.state != GameState::GameOver, "update_game_state() was called when the game had already ended.");
+
+        self.active_colour = self.active_colour.invert();
 
         /* If the next thing to happen is not a promotion:
         If the current game state has occurred 4 times before, enact the fivefold repetition rule (GameOver).
@@ -1399,16 +1577,9 @@ impl Board {
         */
 
         // Fivefold repetition rule.
-        if self.is_nfold_repetition(5) {
-            self.state = BoardState::GameOver;
+        if self._is_nfold_repetition(5) {
+            self.state = GameState::GameOver;
             self.game_over_reason = Some(GameOverReason::FivefoldRepetitionRule);
-            return
-        }
-
-        // 75-move rule.
-        if self.halfmoves >= 150 {
-            self.state = BoardState::GameOver;
-            self.game_over_reason = Some(GameOverReason::SeventyFiveMoveRule);
             return
         }
 
@@ -1430,7 +1601,7 @@ impl Board {
             if remaining_pieces_count == 2 && king_count == 2 || // 2 kings (+ 1 bishop or 1 knight)
                 remaining_pieces_count == 3 && king_count == 2 && (bishop_count == 1 || knight_count == 1)
             {
-                self.state = BoardState::GameOver;
+                self.state = GameState::GameOver;
                 self.game_over_reason = Some(GameOverReason::InsufficientMaterial);
                 return;
             } else if remaining_pieces_count == 4 && king_count == 2 && bishop_count == 2 {
@@ -1441,7 +1612,7 @@ impl Board {
                         if bishop_loc == 64 {
                             bishop_loc = idx;
                         } else if bishop_loc % 2 == idx % 2 {
-                            self.state = BoardState::GameOver;
+                            self.state = GameState::GameOver;
                             self.game_over_reason = Some(GameOverReason::InsufficientMaterial);
                             return;
                         }
@@ -1453,118 +1624,43 @@ impl Board {
         // Check, checkmate, stalemate and in progress.
         if self._is_in_check(self.active_colour) {
             if self._can_make_legal_move() {
-                self.state = BoardState::Check;
+                self.state = GameState::Check;
             } else {
-                self.state = BoardState::GameOver;
+                self.state = GameState::GameOver;
                 self.game_over_reason = Some(GameOverReason::Checkmate);
             }
         } else {
             if self._can_make_legal_move() {
-                self.state = BoardState::Active;
+                self.state = GameState::Active;
             } else {
-                self.state = BoardState::GameOver;
+                self.state = GameState::GameOver;
                 self.game_over_reason = Some(GameOverReason::Stalemate);
             }
         }
+
+        // 75-move rule.
+        if self.halfmoves >= 150 {
+            self.state = GameState::GameOver;
+            self.game_over_reason = Some(GameOverReason::SeventyFiveMoveRule);
+            return
+        }
     }
 
-    fn _is_in_check(&mut self, colour: Colour) -> bool {
-        // TODO allow generating moves of opposite colour
-        // Iterate over pieces of the opposite colour and see if any attack the king.
-        for (i, piece) in self.array.clone().iter().enumerate() {
-            if piece.is_some_and(|p| p.colour != colour) {
-                if self.legal_moves_cache[i].iter().any(
-                    |mv| mv.piece_captured.is_some_and(|p| p.is_king())
-                ) {
-                    return true;
-                }
+    fn _can_make_legal_move(&mut self) -> bool {
+        for i in 0..64 {
+            if self.legal_moves_cache[i].len() > 0 {
+                return true
             }
         }
-
-        // If we have found no cases where the king is in check, the king is not in check.
-        return false;
+        return false
     }
 }
 
-/// A library for running a game of chess. 
-///
-/// % NOTE! Viewing in rustdoc, full descriptions for methods can be viewed under <a href="#implementations">Implementations</a> below. There you can also find links to the source code!
-///
-/// Supports move generation/validation, board modifications, and check/checkmate/stalemate detection.
-/// 
-/// # Usage
-/// 
-/// Example code below. See methods in Game and Position for more details. 
-/// 
-/// ```rust
-/// use chess_engine::*;
-/// 
-/// let mut game = Game::new();
-/// assert_eq!(game.get_active_colour(), Colour::White);
-/// 
-/// // Making moves
-/// let result = game.make_move("e2", "e4"); // moves from e2 to e4
-/// assert!(result.is_ok());
-/// 
-/// let to_pos = Position::parse_str("e7").unwrap();
-/// let from_pos = Position::parse_str("e5").unwrap();
-/// let result = game.make_move_pos(to_pos, from_pos); // moves from e7 to e5
-/// assert!(result.is_ok());
-/// 
-/// match game.get_game_state() {
-///     GameState::InProgress => {
-///         // The game is running (the king is not in check).
-///     },
-///     GameState::Check => {
-///         // The king is in check.
-///     },
-///     GameState::WaitingOnPromotionChoice => {
-///         // We need to promote the pawn!
-///         let result = game.set_promotion(PieceType::Queen);
-///         assert!(result.is_ok());
-///     },
-///     GameState::GameOver => {
-///         // Game over!
-///         match game.get_game_over_reason() {
-///             Some(reason) => {
-///                 eprintln!("The game is over because of {:?}",reason);
-///             },
-///             None => {
-///                 // The game over reason is always set when the game is over
-///                 assert!(false)
-///             },
-///         }
-///     },
-/// }
-/// 
-/// assert_eq!(game.get_game_state(), GameState::InProgress);
-/// # use std::io;
-/// # Ok::<(), io::Error>(())
-/// ```
-/// 
-/// The following methods may be of use if you want to work with the board in any way.
-/// * `get_board()` returns the board as an array of `Option<Piece>`-s.
-/// * `get_possible_moves(Position)` returns a list of all possible moves for the piece at position.
-/// * `get_possible_capture_moves(Position)` returns the possible moves which capture.
-/// * `get_possible_non_capture_moves(Position)` returns the possible moves which do not capture.
-///
-/// If you want to implement manual draws, the following methods might be helpful:
-///
-/// * `submit_draw()` lets you set the game as manually drawn.
-/// * `can_enact_threefold_repetition_rule()` checks if the threefold repetition rule is applicable.
-/// * `can_enact_50_move_rule()` checks if the 50 move rule is applicable.
-#[derive(Clone, Debug)] // The clone derivation is necessary as it is used by try_move
-pub struct Game {
-    pub board: Board,
-}
-
-/// Here we implement the main functions of our game.
+/// Public function implementations
 impl Game {
     /// Initializes a fresh game of chess
     pub fn new() -> Game {
-        Game {
-            board: Board::new(),
-        }
+        return Game::_new()
     }
 
     /// Initializes a game of chess from the game's Forsyth-Edwards Notation (FEN).
@@ -1575,12 +1671,7 @@ impl Game {
     /// that is initialized from FEN, since, reasonably, the engine does not know the
     /// previous states of the game.
     pub fn new_from_fen(fen: String) -> Result<Game,String> {
-        Ok(Game {
-            board: match Board::new_from_fen(fen) {
-                Ok(board) => board,
-                Err(e) => return Err(e),
-            },
-        })
+        return Ok(Game::_new_from_fen(fen)?)
     }
 
     /// Returns all legal moves as a vector of length 64.
@@ -1588,7 +1679,7 @@ impl Game {
     /// (equivalent to `Position::new_from_idx(i)`)
     /// are found at the index i in the vector.
     pub fn get_legal_moves(&self) -> Vec<Vec<Move>> {
-        return self.board.legal_moves_cache.clone()
+        return self.legal_moves_cache.clone()
     }
 
     /// Returns all legal moves from the position `from`.
@@ -1597,7 +1688,7 @@ impl Game {
     pub fn get_legal_moves_from(&self, from: Position) -> Result<Vec<Move>, String> {
         from.valid()?;
 
-        return Ok(self.board.legal_moves_cache[from.idx].clone())
+        return Ok(self.legal_moves_cache[from.idx].clone())
     }
 
     /// Returns all legal moves from the position `from`, that also capture a piece.
@@ -1606,7 +1697,7 @@ impl Game {
     pub fn get_legal_capture_moves_from(&self, from: Position) -> Result<Vec<Move>, String> {
         from.valid()?;
 
-        return Ok(self.board.legal_moves_cache[from.idx]
+        return Ok(self.legal_moves_cache[from.idx]
             .clone()
             .into_iter()
             .filter(|mv| mv.is_capture())
@@ -1620,7 +1711,7 @@ impl Game {
     pub fn get_legal_non_capture_moves_from(&self, from: Position) -> Result<Vec<Move>, String> {
         from.valid()?;
 
-        return Ok(self.board.legal_moves_cache[from.idx]
+        return Ok(self.legal_moves_cache[from.idx]
             .clone()
             .into_iter()
             .filter(|mv| !mv.is_capture())
@@ -1634,7 +1725,7 @@ impl Game {
     /// 
     /// See https://www.chess.com/terms/fen-chess for information about the notation.
     pub fn to_fen(&self) -> String {
-        return self.board.fen_cache.clone();
+        return self.fen_cache.clone();
     }
 
     /// Returns the `Option<Piece>` at position `pos`.
@@ -1644,7 +1735,7 @@ impl Game {
     /// Errors if `pos` is invalid.
     pub fn get(&self, pos: Position) -> Result<Option<Piece>, String> {
         pos.valid()?;
-        return Ok(self.board.array[pos.idx]);
+        return Ok(self.array[pos.idx]);
     }
 
     /// Puts `piece` at position `pos`.
@@ -1652,7 +1743,7 @@ impl Game {
     /// Errors if `pos` is invalid or the placement results in a board with multiple kings.
     pub fn put(&mut self, pos: Position, piece: Piece) -> Result<(), String> {
         pos.valid()?;
-        self.board.array[pos.idx] = Some(piece);
+        self.array[pos.idx] = Some(piece);
         // TODO update state appropriately if this upsets en passant, castling, check, checkmate or promotions
         return Ok(());
     }
@@ -1664,52 +1755,57 @@ impl Game {
     /// Errors if `pos` is invalid.
     pub fn remove(&mut self, pos: Position) -> Result<Option<Piece>, String> {
         pos.valid()?;
-        let removed_piece = self.board.array[pos.idx];
-        self.board.array[pos.idx] = None;
+        let removed_piece = self.array[pos.idx];
+        self.array[pos.idx] = None;
         return Ok(removed_piece);
     }
 
     /// Returns true if the threefold repetition rule can be enacted, otherwise false.
     pub fn is_threefold_repetition(&mut self) -> bool {
-        return self.board.is_nfold_repetition(3)
+        return self._is_nfold_repetition(3)
     }
 
     /// Returns true if the fivefold repetition rule has been enacted, otherwise false.
     pub fn is_fivefold_repetition(&mut self) -> bool {
-        return self.board.is_nfold_repetition(5)
+        return self._is_nfold_repetition(5)
     }
 
     /// Returns true if the 50-move rule can be enacted, otherwise false.
     pub fn is_50_move_rule(&self) -> bool {
-        return self.board.halfmoves >= 100;
+        return self.halfmoves >= 100;
     }
 
     /// Returns true if the 75-move rule has been enacted, otherwise false.
     pub fn is_75_move_rule(&self) -> bool {
-        return self.board.halfmoves >= 150;
+        return self.halfmoves >= 150;
     }
 
     /// Returns true if the game is over, otherwise false.
     pub fn is_game_over(&self) -> bool {
-        return self.board.state == BoardState::GameOver;
+        return self.state == GameState::GameOver;
     }
 
     /// Returns true if the active colour's king is checked, otherwise false.
     pub fn is_check(&self) -> bool {
-        return self.board.state == BoardState::Check;
+        return self.state == GameState::Check;
     }
 
     /// Returns true if the active colour's king is checkmated, otherwise false.
     pub fn is_checkmate(&self) -> bool {
-        return self.board
+        return self
             .game_over_reason
             .is_some_and(|r| r == GameOverReason::Checkmate);
     }
 
     /// Submits a manual draw and puts the game in game over
     pub fn submit_draw(&mut self) {
-        self.board.state = BoardState::GameOver;
-        self.board.game_over_reason = Some(GameOverReason::ManualDraw);
+        self.state = GameState::GameOver;
+        self.game_over_reason = Some(GameOverReason::ManualDraw);
+    }
+
+    // TODO
+    pub fn submit_defeat(winning_colour: Colour) {
+
     }
 
     /// If the game is not over, try to perform the move `mv`.
@@ -1717,57 +1813,74 @@ impl Game {
     /// Returns the resulting board state
     ///
     /// Errors if the move is not legal, the game is over or the input is invalid.
-    pub fn make_move(&mut self, mv: Move) -> Result<BoardState, String> {
-        self.board.make_move(mv)?;
+    pub fn make_move(&mut self, mv: Move) -> Result<GameState, String> {
+        // Checks that the board state is InProgress or Check, else throws an error.
+        if !(self.state == GameState::Active || self.state == GameState::Check) {
+            let error = format!("The game is not in a state where a move can be made. Currently, the state is {:?}.", self.state);
+            return Err(error);
+        }
+        // Validate move
+        mv.legal(self)?;
 
-        Ok(self.board.state)
+        // Perform move
+        self._perform_move(mv);
+
+        // Regenerate caches and append history
+        self._generate_caches(Some(mv));
+
+        // Update active colour
+        self.active_colour = self.active_colour.invert();
+        
+        // Update game state
+        self._update_game_state();
+
+        Ok(self.state)
     }
 
     /// Get the current game state.
-    pub fn get_game_state(&self) -> BoardState {
-        self.board.state
+    pub fn get_game_state(&self) -> GameState {
+        self.state
     }
 
     /// Get the game over reason. Is None if the game is not over.
     pub fn get_game_over_reason(&self) -> Option<GameOverReason> {
-        self.board.game_over_reason
+        self.game_over_reason
     }
 
     /// Get the active colour.
     pub fn get_active_colour(&self) -> Colour {
-        self.board.active_colour
+        self.active_colour
     }
 
-    /// Get a copy of the board as a vector of length 8 * 8 of `Option<Piece>`-s.
+    /// Get a representation of the board as an array of length 64 of `Option<Piece>`-s.
     /// 
-    /// NOTE: Needs to be updated after every mutation of game!
+    /// Note! This needs to be updated every turn!
     /// 
     /// # Example code
     /// 
     /// TODO Write doctest!
     pub fn get_board(&self) -> [Option<Piece>; 8 * 8] {
-        return self.board.array.clone();
+        return self.array.clone();
     }
 
     /// Get a vector of contents `HistoryEntry` which denote the library's recorded history for this game.
     pub fn get_history(&self) -> Vec<HistoryEntry> {
-        return self.board.history.clone();
+        return self.history.clone();
     }
-
 }
 
 /// Implement print routine for Game.
 ///
 /// Output example:
 /// |:-------------:|
-/// |R N B Q K B N R|
+/// |R N B K Q B N R|
 /// |P P P P P P P P|
 /// |* * * * * * * *|
 /// |* * * * * * * *|
 /// |* * * * * * * *|
 /// |* * * * * * * *|
 /// |p p p p p p p p|
-/// |r n b q k b n r|
+/// |r n b k q b n r|
 /// |:-------------:|,
 ///
 impl fmt::Display for Game {
@@ -1783,7 +1896,7 @@ impl fmt::Display for Game {
         for rank in 0..8 {
             output.push('|');
             for file in 0..8 {
-                output.push(match self.board.array[Position::idx(rank, file)] {
+                output.push(match self.array[Position::idx(rank, file)] {
                     Some(p) => p.to_char_colourcased(),
                     None => '*',
                 });
