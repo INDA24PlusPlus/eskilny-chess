@@ -58,12 +58,11 @@ fn main() {
                 "{:?}",
                 game.get_board()[Position::parse_str(input_vec[1]).unwrap().idx]
             );
-        } else if input_vec.len() == 2 {
+        } else if input_vec.len() == 2 || input_vec.len() == 3 {
             // Try to make the move.
-            let mv = match Move::parse_str(
+            let mut mv = match Move::parse_str(
                 &game,
                 &input_str,
-                None
             ) {
                 Ok(res) => res,
                 Err(message) => {
@@ -71,35 +70,22 @@ fn main() {
                     continue
                 }
             };
-            match game.make_move(mv) {
-                Ok(_) => println!("Succeeded in moving the piece!"),
-                Err(message) => println!("Error received: \n'{}'\nPlease try again!", message),
-            };
-        } else if input_vec.len() == 3 {
-            let mut mv_str = String::new();
-            mv_str.push_str(input_vec[0]);
-            mv_str.push(' ');
-            mv_str.push_str(input_vec[1]);
-            let promotion_choice = match PieceType::from_str(input_vec[2]) {
-                Ok(res) => res,
-                Err(message) => {
-                    println!("Error received: \n'{}'\nPlease try again!", message);
-                    continue
-                }
-            };
-
-            // Try to make the move.
-            let mv = match Move::parse_str(
-                &game,
-                &input_str,
-                Some(promotion_choice),
-            ) {
-                Ok(res) => res,
-                Err(message) => {
-                    println!("Error received: \n'{}'\nPlease try again!", message);
-                    continue
-                }
-            };
+            if input_vec.len() == 3 {
+                let promotion_choice = match PieceType::from_str(input_vec[2]) {
+                    Ok(res) => res,
+                    Err(message) => {
+                        println!("Error received: \n'{}'\nPlease try again!", message);
+                        continue
+                    }
+                };
+                match mv.set_promotion_choice(&game, promotion_choice) {
+                    Ok(_) => (),
+                    Err(message) => {
+                        println!("Error received: \n'{}'\nPlease try again!", message);
+                        continue
+                    }
+                };
+            }
             match game.make_move(mv) {
                 Ok(_) => println!("Succeeded in moving the piece!"),
                 Err(message) => println!("Error received: \n'{}'\nPlease try again!", message),
