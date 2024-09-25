@@ -813,12 +813,10 @@ impl Move {
 
         let mut res = String::new();
         if self.is_castling() {
-            let file_diff = self.from.file.abs_diff(self.to.file);
-
-            return match file_diff {
-                2 => Ok(format!("O-O")),
-                3 => Ok(format!("O-O-O")),
-                _ => return Err(format!("Called on an invalid move that looked like castling."))
+            if self.from.file > self.to.file {
+                return Ok(format!("O-O-O"))
+            } else {
+                return Ok(format!("O-O"))
             }
         }
 
@@ -1352,10 +1350,10 @@ impl Game {
         // Castling
         if piece.is_king() {
             for (colour, boolean, a) in [
-                (Colour::White, self.white_has_right_to_castle_queenside, [3,2,1].as_slice()),
-                (Colour::White, self.white_has_right_to_castle_kingside, [4,5].as_slice()),
-                (Colour::Black, self.black_has_right_to_castle_queenside, [3,2,1].as_slice()),
-                (Colour::Black, self.black_has_right_to_castle_kingside, [4,5].as_slice()),
+                (Colour::White, self.white_has_right_to_castle_queenside, [3,2].as_slice()),
+                (Colour::White, self.white_has_right_to_castle_kingside, [5,6].as_slice()),
+                (Colour::Black, self.black_has_right_to_castle_queenside, [59,58].as_slice()),
+                (Colour::Black, self.black_has_right_to_castle_kingside, [61,62].as_slice()),
             ] {
                 if piece.colour == colour && boolean {
                     // Check if castling squares are free.
@@ -1468,6 +1466,18 @@ impl Game {
                 self.array[mv.to.idx] = Some(promoted_piece);
             },
             None => self.array[mv.to.idx] = Some(moved_piece),
+        }
+
+        if moved_piece.is_pawn() && mv.from.rank.abs_diff(mv.to.rank) == 2 && (
+            (moved_piece.is_white() && mv.from.rank == 1)
+            || (moved_piece.is_black() && mv.from.rank == 6)
+        ) {
+            self.en_passant_target =  match mv.from.offset(moved_piece.colour.pawn_dir(), 0) {
+                Ok(res) => Some(res),
+                Err(_) => panic!("should not happen")
+            };
+        } else {
+            self.en_passant_target = None;
         }
 
         // Halfmoves are reset if we move a pawn or capture a piece, otherwise incremented by one
@@ -1799,11 +1809,6 @@ impl Game {
     pub fn submit_draw(&mut self) {
         self.state = GameState::GameOver;
         self.game_over_reason = Some(GameOverReason::ManualDraw);
-    }
-
-    // TODO
-    pub fn submit_defeat(winning_colour: Colour) {
-
     }
 
     /// If the game is not over, try to perform the move `mv`.

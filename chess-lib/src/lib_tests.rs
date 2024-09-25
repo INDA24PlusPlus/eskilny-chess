@@ -6,7 +6,7 @@ use super::*;
 
 
 impl Game {
-    fn _make_moves(&mut self, slash_sep_str: &str) {
+    fn _testing_make_moves(&mut self, slash_sep_str: &str) {
         let moves: Vec<&str> = slash_sep_str.split("/").collect();
 
         for str in moves {
@@ -17,14 +17,14 @@ impl Game {
         }
     }
 
-    fn _make_move(&mut self, str: &str) {
+    fn _testing_make_move(&mut self, str: &str) {
         let mv = Move::parse_str(&self, str);
         assert!(mv.is_ok());
         let result = self.make_move(mv.unwrap());
         assert!(result.is_ok());
     }
 
-    fn _move_is_err(&self, str: &str) {
+    fn _testing_move_is_err(&self, str: &str) {
         assert!(Move::parse_str(self, str).is_err())
     }
 }
@@ -108,7 +108,7 @@ fn game_loads_fen() {
 #[test]
 fn game_enters_check() {
     let mut game = Game::new();
-    game._make_moves("e2 e3/e7 e6/d1 g4/e6 e5/g4 e6");
+    game._testing_make_moves("e2 e3/e7 e6/d1 g4/e6 e5/g4 e6");
     assert_eq!(game.get_game_state(), GameState::Check);
 }
 
@@ -117,8 +117,8 @@ fn game_enters_check() {
 #[test]
 fn game_enters_checkmate() {
     let mut game = Game::_new();
-    game._make_moves("e2 e3/e7 e6/d1 f3/e6 e5/f1 c4/e5 e4");
-    game._make_move("f3 f7");
+    game._testing_make_moves("e2 e3/e7 e6/d1 f3/e6 e5/f1 c4/e5 e4");
+    game._testing_make_move("f3 f7");
     assert_eq!(game.get_game_state(), GameState::GameOver);
     assert!(game.is_checkmate());
 }
@@ -127,7 +127,7 @@ fn game_enters_checkmate() {
 #[test]
 fn promotion_works() {
     let mut game = Game::_new();
-    game._make_moves("e2 e3/d7 d6/e3 e4/d6 d5/e4 d5/e8 d7/d5 d6/d7 c6/d6 d7/d8 e8");
+    game._testing_make_moves("e2 e3/d7 d6/e3 e4/d6 d5/e4 d5/e8 d7/d5 d6/d7 c6/d6 d7/d8 e8");
     
     let mut mv = Move::parse_str(&game, "d7 d8").unwrap();
     assert!(mv.set_promotion_choice(&game, PieceType::King).is_err());
@@ -148,9 +148,9 @@ fn promotion_works() {
 fn game_sets_en_passant_fields_correctly() {
     let mut game = Game::new();
     assert_eq!(game.en_passant_target, None); // en_passant_pos should be None
-    game._make_move("e2 e4");  
+    game._testing_make_move("e2 e4");  
     assert_eq!(game.en_passant_target, Some(Position::parse_str("e3").unwrap())); // en_passant_pos should be the capturable space
-    game._make_move("e7 e6");
+    game._testing_make_move("e7 e6");
     assert_eq!(game.en_passant_target, None); // en_passant_pos should be None
 }
 
@@ -158,7 +158,7 @@ fn game_sets_en_passant_fields_correctly() {
 #[test]
 fn en_passant_works() {
     let mut game = Game::new();
-    game._make_moves("e2 e4/a7 a6/e4 e5/d7 d5/e5 d6");
+    game._testing_make_moves("e2 e4/a7 a6/e4 e5/d7 d5/e5 d6");
     assert_eq!(
         game.array[43].unwrap(),
         Piece {
@@ -173,8 +173,8 @@ fn en_passant_works() {
 #[test]
 fn game_disallows_en_passant() {
     let mut game = Game::new();
-    game._make_moves("e2 e4/d7 d6/e4 e5/d6 d5");
-    game._move_is_err("e5 d6");
+    game._testing_make_moves("e2 e4/d7 d6/e4 e5/d6 d5");
+    game._testing_move_is_err("e5 d6");
 }
 
 /// Test whether the game sets castling bools correctly.
@@ -183,10 +183,10 @@ fn game_disallows_en_passant() {
 fn game_sets_castling_bools_correctly_when_rooks_moved() {
     // Case: Rooks moved
     let mut game = Game::new();
-    game._make_moves("a2 a3/a7 a6/h2 h3/h7 h6");
+    game._testing_make_moves("a2 a3/a7 a6/h2 h3/h7 h6");
 
     // moving a1
-    game._make_move("a1 a2");
+    game._testing_make_move("a1 a2");
     assert!(!game.white_has_right_to_castle_queenside); // castling should be disabled for a1
     assert!(
         game.white_has_right_to_castle_kingside
@@ -195,12 +195,12 @@ fn game_sets_castling_bools_correctly_when_rooks_moved() {
     ); // castling should be enabled for the rest
     
     // moving a8
-    game._make_move("a8 a7");
+    game._testing_make_move("a8 a7");
     assert!(!game.white_has_right_to_castle_queenside && !game.black_has_right_to_castle_queenside); // castling should be disabled for h1 and h8
     assert!(game.white_has_right_to_castle_kingside && game.black_has_right_to_castle_kingside); // castling should be enabled for the rest
 
     // moving h1
-    game._make_move("h1 h2");
+    game._testing_make_move("h1 h2");
     assert!(
         !game.white_has_right_to_castle_queenside
             && !game.white_has_right_to_castle_kingside
@@ -209,7 +209,7 @@ fn game_sets_castling_bools_correctly_when_rooks_moved() {
     assert!(game.black_has_right_to_castle_kingside); // castling should be enabled for h8
     
     // moving h8
-    game._make_move("h8 h7");
+    game._testing_make_move("h8 h7");
     assert!(
         !game.white_has_right_to_castle_queenside
             && !game.white_has_right_to_castle_kingside
@@ -224,10 +224,10 @@ fn game_sets_castling_bools_correctly_when_rooks_moved() {
 fn game_sets_castling_bools_correctly_when_rooks_captured() {
     // Case: Rooks captured
     let mut game = Game::new();
-    game._make_moves("b2 b3/b7 b6/c1 b2/c8 b7/g2 g3/g7 g6");
+    game._testing_make_moves("b2 b3/b7 b6/c1 b2/c8 b7/g2 g3/g7 g6");
 
     // capturing h8
-    game._make_move("b2 h8");
+    game._testing_make_move("b2 h8");
     assert!(!game.black_has_right_to_castle_kingside); // castling should be disabled for h8
     assert!(
         game.white_has_right_to_castle_queenside
@@ -236,14 +236,14 @@ fn game_sets_castling_bools_correctly_when_rooks_captured() {
     ); // castling should be enabled for the rest
     
     // capturing h1
-    game._make_move("b7 h1");
+    game._testing_make_move("b7 h1");
     assert!(!game.white_has_right_to_castle_kingside && !game.black_has_right_to_castle_kingside); // castling should be disabled for h1 and h8
     assert!(game.white_has_right_to_castle_queenside && game.black_has_right_to_castle_queenside); // castling should be enabled for the rest
     
     // capturing a8
-    game._make_move("f1 g2");
-    game._make_move("f8 g7");
-    game._make_move("g2 a8");
+    game._testing_make_move("f1 g2");
+    game._testing_make_move("f8 g7");
+    game._testing_make_move("g2 a8");
     assert!(
         !game.white_has_right_to_castle_kingside
             && !game.black_has_right_to_castle_queenside
@@ -252,7 +252,7 @@ fn game_sets_castling_bools_correctly_when_rooks_captured() {
     assert!(game.white_has_right_to_castle_queenside); // castling should be enabled for the rest
     
     // capturing a1
-    game._make_move("g7 a1");
+    game._testing_make_move("g7 a1");
     // castling should be disabled for all cases
     assert!(
         !game.white_has_right_to_castle_queenside
@@ -268,17 +268,17 @@ fn game_sets_castling_bools_correctly_when_rooks_captured() {
 fn game_sets_castling_bools_correctly_when_king_moved() {
     // Case: King moved.
     let mut game = Game::new();
-    game._make_moves("e2 e3/e7 e6");
+    game._testing_make_moves("e2 e3/e7 e6");
 
     // moving white king
-    game._make_move("e1 e2");
+    game._testing_make_move("e1 e2");
     // castling should be disabled for the white king
     assert!(!game.white_has_right_to_castle_queenside && !game.white_has_right_to_castle_kingside);
     // castling should be enabled for the black king
     assert!(game.black_has_right_to_castle_kingside && game.black_has_right_to_castle_queenside);
     
     // moving black king
-    game._make_move("e8 e7");
+    game._testing_make_move("e8 e7");
     // castling should be disabled for all cases
     assert!(
         !game.white_has_right_to_castle_queenside
@@ -294,19 +294,19 @@ fn game_sets_castling_bools_correctly_when_king_moved() {
 fn game_sets_castling_bools_correctly_when_king_checked() {
     // Case: King checked.
     let mut game = Game::new();
-    game._make_moves("e2 e4/e7 e6/d1 f3/f8 c5");
+    game._testing_make_moves("e2 e4/e7 e6/d1 f3/f8 c5");
 
     // checking black king
-    game._make_move("f3 f7");
+    game._testing_make_move("f3 f7");
     // castling should be disabled for the black king
     assert!(!game.black_has_right_to_castle_queenside && !game.black_has_right_to_castle_kingside);
     // castling should be enabled for the white king
     assert!(game.white_has_right_to_castle_kingside && game.white_has_right_to_castle_queenside);
 
     // checking the white king
-    game._make_move("e8 f7");
-    game._make_move("a2 a3");
-    game._make_move("c5 f2");
+    game._testing_make_move("e8 f7");
+    game._testing_make_move("a2 a3");
+    game._testing_make_move("c5 f2");
     // castling should be disabled for all cases
     assert!(
         !game.white_has_right_to_castle_queenside
@@ -320,7 +320,7 @@ fn game_sets_castling_bools_correctly_when_king_checked() {
 #[test]
 fn game_allows_kingside_castling() {
     let mut game = Game::new();
-    game._make_moves("g1 f3/g8 f6/e2 e4/e7 e5/f1 e2/f8 e7/e1 g1/e8 g8");
+    game._testing_make_moves("g1 f3/g8 f6/e2 e4/e7 e5/f1 e2/f8 e7/e1 g1/e8 g8");
     assert!(
         !game.white_has_right_to_castle_queenside
             && !game.white_has_right_to_castle_kingside
@@ -365,7 +365,7 @@ fn game_allows_kingside_castling() {
 #[test]
 fn game_allows_queenside_castling() {
     let mut game = Game::new();
-    game._make_moves("b1 c3/b8 c6/d2 d4/d7 d5/d1 d3/d8 d6/c1 d2/c8 d7/e1 c1/e8 c8");
+    game._testing_make_moves("b1 c3/b8 c6/d2 d4/d7 d5/d1 d3/d8 d6/c1 d2/c8 d7/e1 c1/e8 c8");
 
     assert!(
         !game.white_has_right_to_castle_queenside
@@ -413,24 +413,24 @@ fn game_allows_queenside_castling() {
 fn game_disallows_castling() {
     let mut game = Game::new();
     // castling should be disallowed (obstructed)
-    game._move_is_err("e1 g1");
-    game._make_moves("g1 f3/e7 e6/e2 e3/d8 g5/f1 d3/g5 e3");
+    game._testing_move_is_err("e1 g1");
+    game._testing_make_moves("g1 f3/e7 e6/e2 e3/d8 g5/f1 d3/g5 e3");
 
-    game._move_is_err("e1 g1") ; // castling should be disallowed
-    game._make_move("d3 e2");
-    game._make_move("e5 e4");
-    game._move_is_err("e1 g1") ; // castling should be disallowed
+    game._testing_move_is_err("e1 g1") ; // castling should be disallowed
+    game._testing_make_move("d3 e2");
+    game._testing_make_move("e5 e4");
+    game._testing_move_is_err("e1 g1") ; // castling should be disallowed
 }
 
 /// Test whether the game disallows castling when the king is checked in passing.
 #[test]
 fn game_disallows_castling_when_checked_in_passing() {
     let mut game = Game::new();
-    game._make_moves("g1 f3/g8 f6/e2 e4/e7 e5/f1 e2/f8 e7/b2 b3/b7 b6/c1 a3/c8 a6/a3 e7/a6 e2");
+    game._testing_make_moves("g1 f3/g8 f6/e2 e4/e7 e5/f1 e2/f8 e7/b2 b3/b7 b6/c1 a3/c8 a6/a3 e7/a6 e2");
 
-    game._move_is_err("e1 g1");
-    game._make_move("a2 a3");
-    game._move_is_err("e8 g8");
+    game._testing_move_is_err("e1 g1");
+    game._testing_make_move("a2 a3");
+    game._testing_move_is_err("e8 g8");
     
     // castling should be allowed, though
     assert!(
@@ -445,13 +445,13 @@ fn game_disallows_castling_when_checked_in_passing() {
 #[test]
 fn test_threefold_and_fivefold_repetition_rules() {
     let mut game = Game::new();
-    game._make_moves("e2 e3/e7 e6");
+    game._testing_make_moves("e2 e3/e7 e6");
     for i in 0..8 { // 2 * 4 moves
         match i%4 {
-            0 => game._make_move("e1 e2"),
-            1 => game._make_move("e8 e7"),
-            2 => game._make_move("e2 e1"),
-            3 => game._make_move("e7 e8"),
+            0 => game._testing_make_move("e1 e2"),
+            1 => game._testing_make_move("e8 e7"),
+            2 => game._testing_make_move("e2 e1"),
+            3 => game._testing_make_move("e7 e8"),
             _ => ()
         }
     }
@@ -460,17 +460,17 @@ fn test_threefold_and_fivefold_repetition_rules() {
     assert_eq!(game.get_game_state(), GameState::Active);
     for i in 8..15 { // 2 * 4 - 1 moves
         match i%4 {
-            0 => game._make_move("e1 e2"),
-            1 => game._make_move("e8 e7"),
-            2 => game._make_move("e2 e1"),
-            3 => game._make_move("e7 e8"),
+            0 => game._testing_make_move("e1 e2"),
+            1 => game._testing_make_move("e8 e7"),
+            2 => game._testing_make_move("e2 e1"),
+            3 => game._testing_make_move("e7 e8"),
             _ => ()
         }
     }
     assert_eq!(game.get_game_state(), GameState::Active);
 
     // Final move
-    game._make_move("e7 e8");
+    game._testing_make_move("e7 e8");
     assert_eq!(game.get_game_state(), GameState::GameOver);
     assert_eq!(game.get_game_over_reason().unwrap(), GameOverReason::FivefoldRepetitionRule);
 }
@@ -479,7 +479,7 @@ fn test_threefold_and_fivefold_repetition_rules() {
 #[test]
 fn test_50_and_75_move_rules() {
     let mut game = Game::new();
-    game._make_moves("e2 e4/e7 e5");
+    game._testing_make_moves("e2 e4/e7 e5");
 
     for _ in 0..100 {
         let legal_moves: Vec<Move> = game.get_legal_moves().into_iter().flatten().collect();
@@ -511,7 +511,7 @@ fn test_insufficient_material() {
             game.array[i] = None;
         }
     }
-    game._make_move("e1 e2");
+    game._testing_make_move("e1 e2");
     assert_eq!(game.get_game_state(), GameState::GameOver);
     assert_eq!(game.get_game_over_reason().unwrap(), GameOverReason::InsufficientMaterial);
 
@@ -524,7 +524,7 @@ fn test_insufficient_material() {
         }
     }
     game.array[11] = Some(Piece{piece_type: PieceType::Pawn, colour: Colour::Black});
-    game._make_move("b1 d2");
+    game._testing_make_move("b1 d2");
     assert_eq!(game.get_game_state(), GameState::GameOver);
     assert_eq!(game.get_game_over_reason().unwrap(), GameOverReason::InsufficientMaterial);
 
@@ -537,7 +537,7 @@ fn test_insufficient_material() {
         }
     }
     game.array[11] = Some(Piece{piece_type: PieceType::Pawn, colour: Colour::Black});
-    game._make_move("c1 d2");
+    game._testing_make_move("c1 d2");
     assert_eq!(game.get_game_state(), GameState::GameOver);
     assert_eq!(game.get_game_over_reason().unwrap(), GameOverReason::InsufficientMaterial);
 
@@ -550,7 +550,7 @@ fn test_insufficient_material() {
         }
     }
     game.array[11] = Some(Piece{piece_type: PieceType::Pawn, colour: Colour::Black});
-    game._make_move("c1 d2");
+    game._testing_make_move("c1 d2");
     assert_eq!(game.get_game_state(), GameState::GameOver);
     assert_eq!(game.get_game_over_reason().unwrap(), GameOverReason::InsufficientMaterial);
 
@@ -563,7 +563,7 @@ fn test_insufficient_material() {
         }
     }
     game.array[11] = Some(Piece{piece_type: PieceType::Pawn, colour: Colour::Black});
-    game._make_move("c1 d2");
+    game._testing_make_move("c1 d2");
     assert_eq!(game.get_game_state(), GameState::Active);
 }
 
