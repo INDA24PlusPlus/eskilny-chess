@@ -621,33 +621,28 @@ impl Move {
         // Evaluate whether en passant is enacted
         let mut en_passant_pos: Option<Position> = None;
         let mut en_passant_piece: Option<Piece> = None;
-        let maybe_en_passant_pos = to.offset(piece_moved.colour // active colour
-            .invert() // opponent's colour
-            .pawn_dir(), // opponent's pawn direction
-            0);
+        
         match game.en_passant_target {
-            Some(pos) => {
-                match maybe_en_passant_pos {
-                    Ok(pos2) => {
-                        if pos == pos2 {
-                            en_passant_pos = Some(pos);
-                            en_passant_piece = game.array[pos.idx];
-                        }
-                    },
-                    Err(_) => (),
-                }
-            }
+            Some(pos) => if piece_moved.is_pawn() && pos == to {
+                en_passant_pos = Some(to.offset(
+                    piece_moved.colour // active colour
+                    .invert() // opponent's colour
+                    .pawn_dir(), // opponent's pawn direction
+                    0).unwrap()
+                );
+                en_passant_piece = game.array[en_passant_pos.unwrap().idx];
+            },
             None => (),
         }
 
         let piece_captured = match game.array[to.idx] {
             Some(piece) => Some(piece),
-            None => en_passant_piece
+            None => en_passant_piece,
         };
 
-        let position_captured = match piece_captured {
+        let position_captured = match game.array[to.idx] {
             Some(_) => Some(to),
-            None => en_passant_pos
+            None => en_passant_pos,
         };
 
         let mv = Move {
@@ -658,8 +653,6 @@ impl Move {
             position_captured,
             promotion_choice: None,
         };
-
-        mv._consistent(game)?;
         
         return Ok(mv)
     }
@@ -684,9 +677,9 @@ impl Move {
         if self.position_captured.is_some_and(|pos| game.array[pos.idx] != self.piece_captured) {
             return Err(format!("Position {:?} does not represent the piece captured!", self.to));
         }
-        if Some(self.to) != self.position_captured
-            && !self.position_captured.is_none()
-            && game.en_passant_target != self.position_captured {
+        if !self.position_captured.is_none()
+            && Some(self.to) != self.position_captured
+            && game.en_passant_target != Some(self.to) {
             return Err(format!("Position between {:?} and {:?}: en passant does not allow this move.", self.to, self.position_captured))
         }
 
@@ -877,11 +870,11 @@ impl PartialEq for Move {
 /// An entry in the chess engine's move history.
 pub struct HistoryEntry {
     /// The Forsyth-Edwards Notation (FEN) for the game state.
-    fen: String,
+    pub fen: String,
     /// Whether or not an en passant pawn is capturable by some piece
-    legal_moves: Vec<Move>,
+    pub legal_moves: Vec<Move>,
     /// The most recent move, is None iff the game just started
-    last_move: Option<Move>,
+    pub last_move: Option<Move>,
 }
 
 impl HistoryEntry {
@@ -1331,6 +1324,11 @@ impl Game {
                             && !self._move_checks_king(mv)
                         {
                             legal_moves.push(mv)
+                        } else if must_capture
+                            && mv.is_en_passant()
+                            && !self._move_checks_king(mv)
+                        {
+                            legal_moves.push(mv)    
                         }
                         continue
                     },
@@ -1369,7 +1367,7 @@ impl Game {
                             Position::new_from_idx(*idx).unwrap(),
                         ) {
                             Ok(res) => res,
-                            Err(_) => break, // promotion edge case not necessary
+                            Err(_) => break,
                         };
                         if self._move_checks_king(test_mv) {
                             break
@@ -1393,11 +1391,14 @@ impl Game {
     /// Panics if `mv` is not consistent.
     fn _move_checks_king(&self, mv: Move) -> bool {
         assert!(mv._consistent(self).is_ok(), "_move_checks_king was called with inconsistent move.");
-
+        let mut mut_mv = mv.clone(); 
         // Clone into a new game to try the movement in that game
         let mut game_clone = self.clone();
-        game_clone._perform_move(mv);
-        return game_clone._is_in_check_no_cache(mv.piece_moved.colour)
+        if mut_mv.is_promotion() {
+            mut_mv.promotion_choice = Some(PieceType::Queen); // example promotion
+        }
+        game_clone._perform_move(mut_mv);
+        return game_clone._is_in_check_no_cache(mut_mv.piece_moved.colour)
     }
 
     fn _is_in_check_no_cache(&self, colour: Colour) -> bool {
@@ -1417,7 +1418,7 @@ impl Game {
                 PieceType::Bishop => ([(1, 1), (1, -1), (-1, 1), (-1, -1)].as_slice(), 8),
                 PieceType::Knight => ([(1,2), (1,-2), (-1,2), (-1,-2),(2,1), (-2,1), (2,-1), (-2,-1)].as_slice(), 1),
                 PieceType::Rook => ([(1, 0), (0, 1), (0, -1), (-1, 0)].as_slice(), 8),
-                PieceType::Pawn => match self.active_colour {
+                PieceType::Pawn => match piece.colour {
                         Colour::White => ([(1,1),(1,-1)].as_slice(), 1),
                         Colour::Black => ([(-1,1),(-1,-1)].as_slice(), 1)
                 },
@@ -1429,10 +1430,13 @@ impl Game {
                         Ok(res) => res,
                         Err(_) => break,
                     };
-                    if self.array[to.idx].is_some_and(
-                        |p| p.is_king() && p.colour == colour
-                    ) {
-                        return true
+                    match self.array[to.idx] {
+                        Some(p) => if p.is_king() && p.colour == colour {
+                            return true
+                        } else {
+                            break
+                        },
+                        None => continue
                     }
                 }
             }
@@ -1459,13 +1463,15 @@ impl Game {
         self.array[mv.from.idx] = None;
         match mv.promotion_choice {
             Some(promotion_choice) => {
-                // En passant!
                 let mut promoted_piece = moved_piece.clone();
                 promoted_piece.piece_type = promotion_choice;
-                self.array[mv.position_captured.unwrap().idx] = None;
                 self.array[mv.to.idx] = Some(promoted_piece);
             },
             None => self.array[mv.to.idx] = Some(moved_piece),
+        }
+
+        if mv.is_en_passant() {
+            self.array[mv.position_captured.unwrap().idx] = None;
         }
 
         if moved_piece.is_pawn() && mv.from.rank.abs_diff(mv.to.rank) == 2 && (
@@ -1556,8 +1562,8 @@ impl Game {
         }
 
         // Check if opponent's king is checked, and update fields in that case
-        if self._is_in_check_no_cache(self.active_colour.invert()) {
-            if self.active_colour.is_white() {
+        if self._is_in_check_no_cache(moved_piece.colour.invert()) {
+            if moved_piece.colour.is_black() {
                 self.white_has_right_to_castle_queenside = false;
                 self.white_has_right_to_castle_kingside = false;
             } else {

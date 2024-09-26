@@ -11,6 +11,7 @@ impl Game {
 
         for str in moves {
             let mv = Move::parse_str(&self, str);
+            println!("{}", self.to_fen());
             assert!(mv.is_ok());
             let result = self.make_move(mv.unwrap());
             assert!(result.is_ok());
@@ -415,10 +416,9 @@ fn game_disallows_castling() {
     // castling should be disallowed (obstructed)
     game._testing_move_is_err("e1 g1");
     game._testing_make_moves("g1 f3/e7 e6/e2 e3/d8 g5/f1 d3/g5 e3");
-
     game._testing_move_is_err("e1 g1") ; // castling should be disallowed
     game._testing_make_move("d3 e2");
-    game._testing_make_move("e5 e4");
+    game._testing_make_move("e6 e5");
     game._testing_move_is_err("e1 g1") ; // castling should be disallowed
 }
 
@@ -483,8 +483,14 @@ fn test_50_and_75_move_rules() {
 
     for _ in 0..100 {
         let legal_moves: Vec<Move> = game.get_legal_moves().into_iter().flatten().collect();
-        game.make_move(legal_moves[0]);
-        game.state = GameState::Active // avoid repetition rules
+        for mv in legal_moves {
+            if !mv.is_capture() && !mv.piece_moved.is_pawn() {
+                game.make_move(mv).unwrap();
+                break
+            }
+        }
+        game.state = GameState::Active; // avoid repetition rules
+        println!("{}", game)
     }
 
     assert_eq!(game.halfmoves, 100);
@@ -492,7 +498,12 @@ fn test_50_and_75_move_rules() {
 
     for _ in 0..50 {
         let legal_moves: Vec<Move> = game.get_legal_moves().into_iter().flatten().collect();
-        game.make_move(legal_moves[0]);
+        for mv in legal_moves {
+            if !mv.is_capture() && !mv.piece_moved.is_pawn() {
+                game.make_move(mv).unwrap();
+                break
+            }
+        }
         game.state = GameState::Active // avoid repetition rules
     }
 

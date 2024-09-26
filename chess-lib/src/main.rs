@@ -9,11 +9,18 @@ This file shows a basic way to interact with the chess library.
 */
 
 fn main() {
-    /* let mut game = match Game::new_from_fen(String::from("8/8/4K3/8/8/4k3/r7/8 b - - 0 1")){
-        Ok(res) => res,
-        Err(e) => panic!("{}", e),
-    }; */
-    let mut game = Game::new();
+    let use_fen = true;
+    // let fen = "RNBQKBNR/8/8/PPPPPPPP/pppppppp/8/8/rnbqkbnr w KQkq h6 0 8".to_string();
+    // let fen = "R3K2R/8/8/8/8/8/8/r3k2r w KQkq - 6 11".to_string();
+    // let fen = "R3K2R/1NBQ1BN1/8/8/8/8/1nbq1bn1/r3k2r w KQkq - 6 11".to_string();
+    // let fen = "RNBQK2R/PPPP1PPP/3BqN2/8/8/4p3/pppp1ppp/rnb1kbnr w kq - 0 3".to_string();
+    let fen = "RNBQKBNR/PPPP1PPP/8/8/3pP3/p7/1pp1pppp/rnbqkbnr w KQkq d6 0 2".to_string();
+    let mut game: Game;
+    if use_fen {
+        game = Game::new_from_fen(fen).unwrap();
+    } else {
+        game = Game::new();
+    }
 
     loop {
         use std::io;
@@ -58,6 +65,8 @@ fn main() {
                 "{:?}",
                 game.get_board()[Position::parse_str(input_vec[1]).unwrap().idx]
             );
+        } else if input_vec[0] == "fen" {
+            println!("{}", game.to_fen())
         } else if input_vec.len() == 2 || input_vec.len() == 3 {
             // Try to make the move.
             let mut mv = match Move::parse_str(
